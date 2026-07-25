@@ -16,20 +16,15 @@ export default function LivePreview() {
 
   async function handleGenerate() {
     setLoading(true);
-    const res = await fetch('/api/generate', {
-      method: 'POST',
-      body: JSON.stringify({ prompt }),
-    });
-    const reader = res.body!.getReader();
-    const decoder = new TextDecoder();
-    let acc = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      acc += decoder.decode(value);
-      const matches = acc.match(/"text":"((?:[^"\\]|\\.)*)"/g) || [];
-      const text = matches.map(m => JSON.parse(`{${m}}`).text).join('');
-      if (text) setCode(stripFences(text));
+    try {
+      const res = await fetch('/api/generate', {
+        method: 'POST',
+        body: JSON.stringify({ prompt }),
+      });
+      const data = await res.json();
+      setCode(stripFences(data.code));
+    } catch (e) {
+      console.error(e);
     }
     setLoading(false);
   }
