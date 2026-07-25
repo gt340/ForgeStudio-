@@ -9,10 +9,18 @@ export async function POST(req: Request) {
 
   const message = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 2000,
+    max_tokens: 3000,
     messages: [{
       role: 'user',
-      content: `Generate a single self-contained React component (default export "App") for: ${prompt}. Use inline styles or Tailwind classes only. Keep it concise. Avoid apostrophes and nested quotes in text content — use plain ASCII characters only. Return ONLY raw code with no markdown formatting, no code fences, no explanation.`,
+      content: `Generate a single self-contained React component (default export "App") for: ${prompt}.
+
+Rules:
+- Use inline styles only, as plain JS objects (style={{ key: "value" }}).
+- Never use double quotes inside string values — use plain text with no quote marks, apostrophes, or special characters.
+- Never use template literals or backticks.
+- Keep all image URLs short and complete: use https://picsum.photos/400/300 style URLs only, never truncate a URL.
+- Keep the component under 100 lines total.
+- Return ONLY raw code. No markdown, no code fences, no explanation, no comments.`,
     }],
   });
 

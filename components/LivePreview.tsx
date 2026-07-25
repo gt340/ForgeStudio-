@@ -13,13 +13,17 @@ export default function LivePreview() {
   const [prompt, setPrompt] = useState('');
   const [code, setCode] = useState('export default function App() {\n  return <div style={{padding:40}}>Describe a site above to generate it.</div>;\n}');
   const [loading, setLoading] = useState(false);
+  const [lastPrompt, setLastPrompt] = useState('');
 
-  async function handleGenerate() {
+  async function handleGenerate(usePrompt?: string) {
+    const p = usePrompt ?? prompt;
+    if (!p) return;
     setLoading(true);
+    setLastPrompt(p);
     try {
       const res = await fetch('/api/generate', {
         method: 'POST',
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt: p }),
       });
       const data = await res.json();
       setCode(stripFences(data.code));
@@ -39,12 +43,21 @@ export default function LivePreview() {
           className="flex-1 rounded-lg bg-black/40 border border-white/10 px-4 py-2 text-sm"
         />
         <button
-          onClick={handleGenerate}
+          onClick={() => handleGenerate()}
           disabled={loading}
           className="rounded-lg bg-cyan-400 text-black px-5 py-2 text-sm font-semibold"
         >
           {loading ? 'Forging...' : 'Generate'}
         </button>
+        {lastPrompt && (
+          <button
+            onClick={() => handleGenerate(lastPrompt)}
+            disabled={loading}
+            className="rounded-lg bg-white/10 text-white px-5 py-2 text-sm font-semibold border border-white/20"
+          >
+            Regenerate
+          </button>
+        )}
       </div>
       <Sandpack
         template="react"
