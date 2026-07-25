@@ -12,7 +12,7 @@ export async function POST(req: Request) {
     max_tokens: 2000,
     messages: [{
       role: 'user',
-      content: `Generate a single self-contained React component (default export "App") for: ${prompt}. Use inline styles or Tailwind classes only. Keep it concise. Return ONLY raw code with no markdown formatting, no code fences, no explanation.`,
+      content: `Generate a single self-contained React component (default export "App") for: ${prompt}. Use inline styles or Tailwind classes only. Keep it concise. Avoid apostrophes and nested quotes in text content — use plain ASCII characters only. Return ONLY raw code with no markdown formatting, no code fences, no explanation.`,
     }],
   });
 
