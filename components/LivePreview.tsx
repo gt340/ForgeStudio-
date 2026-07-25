@@ -2,6 +2,13 @@
 import { useState } from 'react';
 import { Sandpack } from '@codesandbox/sandpack-react';
 
+function stripFences(text: string) {
+  return text
+    .replace(/^```(jsx|tsx|js|javascript|typescript)?\n?/i, '')
+    .replace(/```\s*$/, '')
+    .trim();
+}
+
 export default function LivePreview() {
   const [prompt, setPrompt] = useState('');
   const [code, setCode] = useState('export default function App() {\n  return <div style={{padding:40}}>Describe a site above to generate it.</div>;\n}');
@@ -22,7 +29,7 @@ export default function LivePreview() {
       acc += decoder.decode(value);
       const matches = acc.match(/"text":"((?:[^"\\]|\\.)*)"/g) || [];
       const text = matches.map(m => JSON.parse(`{${m}}`).text).join('');
-      if (text) setCode(text);
+      if (text) setCode(stripFences(text));
     }
     setLoading(false);
   }
