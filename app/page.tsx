@@ -1,5 +1,6 @@
 import LivePreview from '@/components/LivePreview';
 import EnvVarsPanel from '@/components/EnvVarsPanel';
+import IntegrationsCanvas from '@/components/IntegrationsCanvas';
 
 export default function Home() {
   return (
@@ -7,6 +8,7 @@ export default function Home() {
       <h1 className="text-4xl font-bold">ForgeStudio — live demo</h1>
       <LivePreview />
       <EnvVarsPanel />
+      <IntegrationsCanvas />
     </main>
   );
 }
