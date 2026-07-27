@@ -65,7 +65,7 @@ export default function IntegrationsCanvas() {
             <button
               key={item.name}
               onClick={() =>
-                existing ? disconnect(existing.id) : connect(item.name)
+                  existing ? disconnect(existing.id) : item.name === 'Google Business' ? (window.location.href = '/api/auth/google') : connect(item.name)
               }
               disabled={loading}
               className={`rounded-lg p-4 text-left border transition ${
