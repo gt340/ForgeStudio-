@@ -1,4 +1,10 @@
 import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
+
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_ANON_KEY!
+);
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -32,8 +38,16 @@ export async function GET(request: Request) {
     return NextResponse.redirect("https://forge-studio-rosy.vercel.app/?google=error");
   }
 
-  // At this point tokenData.access_token / refresh_token exist.
-  // TODO: store tokenData in your integrations table (Supabase), same pattern as Stripe/Slack.
+  const { error: dbError } = await supabase.from("integrations").insert({
+    provider: "Google Business",
+    access_token: tokenData.access_token,
+    refresh_token: tokenData.refresh_token ?? null,
+  });
+
+  if (dbError) {
+    console.error("Failed to save Google integration:", dbError);
+    return NextResponse.redirect("https://forge-studio-rosy.vercel.app/?google=error");
+  }
 
   return NextResponse.redirect("https://forge-studio-rosy.vercel.app/?google=connected");
 }
