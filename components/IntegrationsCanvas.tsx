@@ -14,6 +14,7 @@ const AVAILABLE = [
   { name: 'GitHub', color: '#333333' },
   { name: 'Resend', color: '#000000' },
   { name: 'Cloudflare', color: '#f38020' },
+  { name: 'Google Business', color: '#4285f4' },
 ];
 
 export default function IntegrationsCanvas() {
