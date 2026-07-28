@@ -1,6 +1,7 @@
 import LivePreview from '@/components/LivePreview';
 import EnvVarsPanel from '@/components/EnvVarsPanel';
 import IntegrationsCanvas from '@/components/IntegrationsCanvas';
+import SeoPanel from '@/components/SeoPanel';
 
 export default function Home() {
   return (
@@ -10,6 +11,7 @@ export default function Home() {
       <LivePreview />
       <EnvVarsPanel />
       <IntegrationsCanvas />
+        <SeoPanel />
     </main>
   );
 }
