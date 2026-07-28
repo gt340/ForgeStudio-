@@ -32,6 +32,10 @@ export default function IntegrationsCanvas() {
   }, []);
 
   async function connect(provider: string) {
+    if (provider === 'GitHub') {
+      window.location.href = '/api/auth/github/start';
+      return;
+    }
     setLoading(true);
     await fetch('/api/integrations', {
       method: 'POST',
