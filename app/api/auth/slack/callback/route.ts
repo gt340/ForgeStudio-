@@ -4,7 +4,9 @@ import { supabase } from '@/lib/supabase';
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const code = searchParams.get('code');
-  const origin = new URL(req.url).origin;
+  const host = req.headers.get('x-forwarded-host') || req.headers.get('host');
+  const protocol = req.headers.get('x-forwarded-proto') || 'https';
+  const origin = `${protocol}://${host}`;
 
   if (!code) {
     return NextResponse.redirect(`${origin}?error=missing_code`);

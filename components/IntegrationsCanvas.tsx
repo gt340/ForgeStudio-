@@ -14,11 +14,14 @@ const AVAILABLE = [
   { name: 'GitHub', color: '#333333' },
   { name: 'Resend', color: '#000000' },
   { name: 'Cloudflare', color: '#f38020' },
+  { name: 'Paystack', color: '#00c3f7' },
   { name: 'Google Business', color: '#4285f4' },
 ];
 
 export default function IntegrationsCanvas() {
   const [connected, setConnected] = useState<Integration[]>([]);
+  const [paystackKey, setPaystackKey] = useState('');
+  const [showPaystackForm, setShowPaystackForm] = useState(false);
   const [loading, setLoading] = useState(false);
 
   async function loadIntegrations() {
@@ -31,7 +34,24 @@ export default function IntegrationsCanvas() {
     loadIntegrations();
   }, []);
 
+  async function submitPaystackKey() {
+    setLoading(true);
+    await fetch('/api/integrations/paystack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ secretKey: paystackKey }),
+    });
+    setShowPaystackForm(false);
+    setPaystackKey('');
+    await loadIntegrations();
+    setLoading(false);
+  }
+
   async function connect(provider: string) {
+    if (provider === 'Paystack') {
+      setShowPaystackForm(true);
+      return;
+    }
     if (provider === 'Slack') {
       window.location.href = '/api/auth/slack/start';
       return;
@@ -67,6 +87,25 @@ export default function IntegrationsCanvas() {
         Tap a service to connect it to your project.
       </p>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        {showPaystackForm && (
+          <div className="mt-4 p-4 border border-white/10 rounded-lg bg-white/5">
+            <label className="text-sm block mb-2">Paystack Secret Key</label>
+            <input
+              type="password"
+              value={paystackKey}
+              onChange={(e) => setPaystackKey(e.target.value)}
+              placeholder="sk_live_..."
+              className="w-full p-2 rounded bg-black/30 border border-white/10 text-sm mb-2"
+            />
+            <button
+              onClick={submitPaystackKey}
+              disabled={loading}
+              className="px-4 py-2 bg-cyan-500 rounded text-sm"
+            >
+              Save Key
+            </button>
+          </div>
+        )}
         {AVAILABLE.map((item) => {
           const existing = isConnected(item.name);
           return (
