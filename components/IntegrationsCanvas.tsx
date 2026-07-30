@@ -32,6 +32,10 @@ export default function IntegrationsCanvas() {
   }, []);
 
   async function connect(provider: string) {
+    if (provider === 'Slack') {
+      window.location.href = '/api/auth/slack/start';
+      return;
+    }
     if (provider === 'GitHub') {
       window.location.href = '/api/auth/github/start';
       return;
