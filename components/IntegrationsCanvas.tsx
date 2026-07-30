@@ -56,6 +56,14 @@ export default function IntegrationsCanvas() {
       window.location.href = '/api/auth/slack/start';
       return;
     }
+    if (provider === 'Supabase') {
+      window.location.href = '/api/auth/supabase/start';
+      return;
+    }
+    if (provider === 'Supabase') {
+      window.location.href = '/api/auth/supabase/start';
+      return;
+    }
     if (provider === 'GitHub') {
       window.location.href = '/api/auth/github/start';
       return;
