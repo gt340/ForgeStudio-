@@ -1,4 +1,4 @@
-'use client';
+'use client'
 import { useState, useEffect } from 'react';
 
 type Integration = {
@@ -22,6 +22,8 @@ export default function IntegrationsCanvas() {
   const [connected, setConnected] = useState<Integration[]>([]);
   const [paystackKey, setPaystackKey] = useState('');
   const [showPaystackForm, setShowPaystackForm] = useState(false);
+  const [resendKey, setResendKey] = useState('');
+  const [showResendForm, setShowResendForm] = useState(false);
   const [loading, setLoading] = useState(false);
 
   async function loadIntegrations() {
@@ -47,9 +49,26 @@ export default function IntegrationsCanvas() {
     setLoading(false);
   }
 
+  async function submitResendKey() {
+    setLoading(true);
+    await fetch('/api/integrations/resend', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey: resendKey }),
+    });
+    setShowResendForm(false);
+    setResendKey('');
+    await loadIntegrations();
+    setLoading(false);
+  }
+
   async function connect(provider: string) {
     if (provider === 'Paystack') {
       setShowPaystackForm(true);
+      return;
+    }
+    if (provider === 'Resend') {
+      setShowResendForm(true);
       return;
     }
     if (provider === 'Slack') {
@@ -107,6 +126,25 @@ export default function IntegrationsCanvas() {
             />
             <button
               onClick={submitPaystackKey}
+              disabled={loading}
+              className="px-4 py-2 bg-cyan-500 rounded text-sm"
+            >
+              Save Key
+            </button>
+          </div>
+        )}
+        {showResendForm && (
+          <div className="mt-4 p-4 border border-white/10 rounded-lg bg-white/5">
+            <label className="text-sm block mb-2">Resend API Key</label>
+            <input
+              type="text"
+              value={resendKey}
+              onChange={(e) => setResendKey(e.target.value)}
+              placeholder="re_..."
+              className="w-full p-2 rounded bg-black/30 border border-white/10 text-sm mb-2"
+            />
+            <button
+              onClick={submitResendKey}
               disabled={loading}
               className="px-4 py-2 bg-cyan-500 rounded text-sm"
             >
