@@ -24,6 +24,10 @@ export default function IntegrationsCanvas() {
   const [showPaystackForm, setShowPaystackForm] = useState(false);
   const [resendKey, setResendKey] = useState('');
   const [showResendForm, setShowResendForm] = useState(false);
+  const [cloudflareKey, setCloudflareKey] = useState('');
+  const [showCloudflareForm, setShowCloudflareForm] = useState(false);
+  const [cloudflareKey, setCloudflareKey] = useState('');
+  const [showCloudflareForm, setShowCloudflareForm] = useState(False);
   const [loading, setLoading] = useState(false);
 
   async function loadIntegrations() {
@@ -62,6 +66,19 @@ export default function IntegrationsCanvas() {
     setLoading(false);
   }
 
+  async function submitCloudflareKey() {
+    setLoading(true);
+    await fetch('/api/integrations/cloudflare', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey: cloudflareKey }),
+    });
+    setShowCloudflareForm(false);
+    setCloudflareKey('');
+    await loadIntegrations();
+    setLoading(false);
+  }
+
   async function connect(provider: string) {
     if (provider === 'Paystack') {
       setShowPaystackForm(true);
@@ -69,6 +86,10 @@ export default function IntegrationsCanvas() {
     }
     if (provider === 'Resend') {
       setShowResendForm(true);
+      return;
+    }
+    if (provider === 'Cloudflare') {
+      setShowCloudflareForm(true);
       return;
     }
     if (provider === 'Slack') {
@@ -145,6 +166,25 @@ export default function IntegrationsCanvas() {
             />
             <button
               onClick={submitResendKey}
+              disabled={loading}
+              className="px-4 py-2 bg-cyan-500 rounded text-sm"
+            >
+              Save Key
+            </button>
+          </div>
+        )}
+        {showCloudflareForm && (
+          <div className="mt-4 p-4 border border-white/10 rounded-lg bg-white/5">
+            <label className="text-sm block mb-2">Cloudflare API Token</label>
+            <input
+              type="text"
+              value={cloudflareKey}
+              onChange={(e) => setCloudflareKey(e.target.value)}
+              placeholder="cf_..."
+              className="w-full p-2 rounded bg-black/30 border border-white/10 text-sm mb-2"
+            />
+            <button
+              onClick={submitCloudflareKey}
               disabled={loading}
               className="px-4 py-2 bg-cyan-500 rounded text-sm"
             >
