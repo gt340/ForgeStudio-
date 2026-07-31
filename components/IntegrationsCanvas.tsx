@@ -26,8 +26,6 @@ export default function IntegrationsCanvas() {
   const [showResendForm, setShowResendForm] = useState(false);
   const [cloudflareKey, setCloudflareKey] = useState('');
   const [showCloudflareForm, setShowCloudflareForm] = useState(false);
-  const [cloudflareKey, setCloudflareKey] = useState('');
-  const [showCloudflareForm, setShowCloudflareForm] = useState(False);
   const [loading, setLoading] = useState(false);
 
   async function loadIntegrations() {
