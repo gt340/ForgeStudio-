@@ -80,7 +80,34 @@ export default function LivePreview() {
       const code = stripFences(genData.code);
 
       setStatus('booting');
-      const files = buildSandboxFiles(code);
+      const files = function buildSandboxFiles(componentCode: string) {
+  return {
+    'package.json': JSON.stringify(
+      {
+        name: 'forgestudio-preview',
+        private: true,
+        scripts: { dev: 'next dev' },
+        dependencies: {
+          next: '14.2.5',
+          react: '18.3.1',
+          'react-dom': '18.3.1',
+        },
+      },
+      null,
+      2
+    ),
+    'next.config.js': 'module.exports = {};',
+    'app/layout.js':
+      'export default function RootLayout({ children }) {\n' +
+      '  return (\n' +
+      '    <html lang="en">\n' +
+      '      <body>{children}</body>\n' +
+      '    </html>\n' +
+      '  );\n' +
+      '}\n',
+    'app/page.js': componentCode,
+  };
+      }
 
       const createRes = await fetch('/api/sandbox/create', {
         method: 'POST',
