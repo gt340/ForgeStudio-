@@ -19,7 +19,10 @@ export async function GET(req: Request) {
   const ready = statusCode.startsWith('2') || statusCode.startsWith('3');
 
   if (!ready) {
-    return NextResponse.json({ ready: false });
+    const logCheck = await sandbox.commands.run(
+      'tail -n 60 /home/user/project/dev.log 2>/dev/null || echo "no log yet"'
+    );
+    return NextResponse.json({ ready: false, log: logCheck.stdout });
   }
 
   const host = sandbox.getHost(3000);

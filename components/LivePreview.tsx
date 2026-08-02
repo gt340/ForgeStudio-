@@ -1,6 +1,5 @@
 'use client';
 import { useState } from 'react';
-import { Sandpack } from '@codesandbox/sandpack-react';
 
 function stripFences(text: string) {
   return text
@@ -9,26 +8,101 @@ function stripFences(text: string) {
     .trim();
 }
 
+function buildSandboxFiles(componentCode: string) {
+  return {
+    'package.json': JSON.stringify(
+      {
+        name: 'forgestudio-preview',
+        private: true,
+        scripts: { dev: 'next dev' },
+        dependencies: {
+          next: '14.2.5',
+          react: '18.3.1',
+          'react-dom': '18.3.1',
+        },
+      },
+      null,
+      2
+    ),
+    'next.config.js': 'module.exports = {};',
+    'app/layout.js':
+      'export default function RootLayout({ children }) {\n' +
+      '  return (\n' +
+      '    <html lang="en">\n' +
+      '      <body>{children}</body>\n' +
+      '    </html>\n' +
+      '  );\n' +
+      '}\n',
+    'app/page.js': componentCode,
+  };
+}
+
 export default function LivePreview() {
   const [prompt, setPrompt] = useState('');
-  const [code, setCode] = useState('export default function App() {\n  return <div style={{padding:40}}>Describe a site above to generate it.</div>;\n}');
   const [loading, setLoading] = useState(false);
   const [lastPrompt, setLastPrompt] = useState('');
+  const [status, setStatus] = useState<'idle' | 'generating' | 'booting' | 'ready' | 'error'>('idle');
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [debugLog, setDebugLog] = useState('');
+
+  async function pollStatus(sandboxId: string) {
+    const maxAttempts = 40;
+    let lastLog = '';
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise((r) => setTimeout(r, 3000));
+      try {
+        const res = await fetch(`/api/sandbox/status?id=${sandboxId}`);
+        const data = await res.json();
+        if (data.log) lastLog = data.log;
+        if (data.ready && data.url) {
+          setPreviewUrl(data.url);
+          setStatus('ready');
+          return;
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    setDebugLog(lastLog);
+    setStatus('error');
+  }
 
   async function handleGenerate(usePrompt?: string) {
     const p = usePrompt ?? prompt;
     if (!p) return;
     setLoading(true);
     setLastPrompt(p);
+    setStatus('generating');
+    setPreviewUrl(null);
+    setDebugLog('');
+
     try {
-      const res = await fetch('/api/generate', {
+      const genRes = await fetch('/api/generate', {
         method: 'POST',
         body: JSON.stringify({ prompt: p }),
       });
-      const data = await res.json();
-      setCode(stripFences(data.code));
+      const genData = await genRes.json();
+      const code = stripFences(genData.code);
+
+      setStatus('booting');
+      const files = buildSandboxFiles(code);
+
+      const createRes = await fetch('/api/sandbox/create', {
+        method: 'POST',
+        body: JSON.stringify({ files }),
+      });
+      const createData = await createRes.json();
+
+      if (!createData.sandboxId) {
+        setStatus('error');
+        setLoading(false);
+        return;
+      }
+
+      await pollStatus(createData.sandboxId);
     } catch (e) {
       console.error(e);
+      setStatus('error');
     }
     setLoading(false);
   }
@@ -59,12 +133,27 @@ export default function LivePreview() {
           </button>
         )}
       </div>
-      <Sandpack
-        template="react"
-        files={{ '/App.js': code }}
-        theme="dark"
-        options={{ showConsole: false, editorHeight: 480 }}
-      />
+
+      <div className="rounded-lg border border-white/10 bg-black/40 min-h-[480px] flex items-center justify-center overflow-hidden">
+        {status === 'idle' && (
+          <p className="text-white/40 text-sm">Describe a site above to generate it.</p>
+        )}
+        {status === 'generating' && (
+          <p className="text-white/60 text-sm">Generating code...</p>
+        )}
+        {status === 'booting' && (
+          <p className="text-white/60 text-sm">Booting live sandbox... this can take up to a minute.</p>
+        )}
+        {status === 'error' && (
+          <div className="text-left text-xs text-red-400 p-4 overflow-auto max-h-[480px] w-full whitespace-pre-wrap font-mono">
+            <p className="mb-2 font-semibold">Something went wrong. Try Regenerate.</p>
+            {debugLog && <pre>{debugLog}</pre>}
+          </div>
+        )}
+        {status === 'ready' && previewUrl && (
+          <iframe src={previewUrl} className="w-full h-full" title="Live preview" />
+        )}
+      </div>
     </div>
   );
 }
