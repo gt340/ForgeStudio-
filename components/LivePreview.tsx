@@ -37,33 +37,82 @@ function buildSandboxFiles(componentCode: string) {
   };
 }
 
+type PollResult = { ready: true; url: string } | { ready: false; log: string };
+
 export default function LivePreview() {
   const [prompt, setPrompt] = useState('');
+  const [editPrompt, setEditPrompt] = useState('');
   const [loading, setLoading] = useState(false);
   const [lastPrompt, setLastPrompt] = useState('');
-  const [status, setStatus] = useState<'idle' | 'generating' | 'booting' | 'ready' | 'error'>('idle');
+  const [code, setCode] = useState<string | null>(null);
+  const [sandboxId, setSandboxId] = useState<string | null>(null);
+  const [status, setStatus] = useState<
+    'idle' | 'generating' | 'booting' | 'editing' | 'repairing' | 'ready' | 'error'
+  >('idle');
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [debugLog, setDebugLog] = useState('');
 
-  async function pollStatus(sandboxId: string) {
+  async function pollStatus(sbId: string): Promise<PollResult> {
     const maxAttempts = 40;
     let lastLog = '';
     for (let i = 0; i < maxAttempts; i++) {
       await new Promise((r) => setTimeout(r, 3000));
       try {
-        const res = await fetch(`/api/sandbox/status?id=${sandboxId}`);
+        const res = await fetch(`/api/sandbox/status?id=${sbId}`);
         const data = await res.json();
         if (data.log) lastLog = data.log;
         if (data.ready && data.url) {
-          setPreviewUrl(data.url);
-          setStatus('ready');
-          return;
+          return { ready: true, url: data.url };
         }
       } catch (e) {
         console.error(e);
       }
     }
-    setDebugLog(lastLog);
+    return { ready: false, log: lastLog };
+  }
+
+  async function resolveBuild(
+    sbId: string,
+    currentCode: string,
+    originalPrompt: string,
+    attempt = 0
+  ) {
+    const result = await pollStatus(sbId);
+
+    if (result.ready) {
+      setPreviewUrl(result.url);
+      setStatus('ready');
+      return;
+    }
+
+    if (attempt < 2) {
+      setStatus('repairing');
+      try {
+        const repairRes = await fetch('/api/generate', {
+          method: 'POST',
+          body: JSON.stringify({
+            prompt: originalPrompt,
+            existingCode: currentCode,
+            errorLog: result.log,
+          }),
+        });
+        const repairData = await repairRes.json();
+        const fixedCode = stripFences(repairData.code);
+        setCode(fixedCode);
+
+        const files = buildSandboxFiles(fixedCode);
+        await fetch('/api/sandbox/update', {
+          method: 'POST',
+          body: JSON.stringify({ sandboxId: sbId, files }),
+        });
+
+        return resolveBuild(sbId, fixedCode, originalPrompt, attempt + 1);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    setDebugLog(result.log);
     setStatus('error');
   }
 
@@ -75,6 +124,7 @@ export default function LivePreview() {
     setStatus('generating');
     setPreviewUrl(null);
     setDebugLog('');
+    setSandboxId(null);
 
     try {
       const genRes = await fetch('/api/generate', {
@@ -82,10 +132,11 @@ export default function LivePreview() {
         body: JSON.stringify({ prompt: p }),
       });
       const genData = await genRes.json();
-      const code = stripFences(genData.code);
+      const newCode = stripFences(genData.code);
+      setCode(newCode);
 
       setStatus('booting');
-      const files = buildSandboxFiles(code);
+      const files = buildSandboxFiles(newCode);
 
       const createRes = await fetch('/api/sandbox/create', {
         method: 'POST',
@@ -98,8 +149,40 @@ export default function LivePreview() {
         setLoading(false);
         return;
       }
+      setSandboxId(createData.sandboxId);
 
-      await pollStatus(createData.sandboxId);
+      await resolveBuild(createData.sandboxId, newCode, p);
+    } catch (e) {
+      console.error(e);
+      setStatus('error');
+    }
+    setLoading(false);
+  }
+
+  async function handleEdit() {
+    const instruction = editPrompt;
+    if (!instruction || !sandboxId || !code) return;
+    setLoading(true);
+    setStatus('editing');
+    setDebugLog('');
+
+    try {
+      const genRes = await fetch('/api/generate', {
+        method: 'POST',
+        body: JSON.stringify({ prompt: instruction, existingCode: code }),
+      });
+      const genData = await genRes.json();
+      const newCode = stripFences(genData.code);
+      setCode(newCode);
+
+      const files = buildSandboxFiles(newCode);
+      await fetch('/api/sandbox/update', {
+        method: 'POST',
+        body: JSON.stringify({ sandboxId, files }),
+      });
+
+      setEditPrompt('');
+      await resolveBuild(sandboxId, newCode, instruction);
     } catch (e) {
       console.error(e);
       setStatus('error');
@@ -108,6 +191,7 @@ export default function LivePreview() {
   }
 
   const idle = status === 'idle' && !previewUrl;
+  const busy = loading || status === 'generating' || status === 'booting' || status === 'editing' || status === 'repairing';
 
   return (
     <div className="space-y-6">
@@ -133,13 +217,13 @@ export default function LivePreview() {
           />
           <div className="flex items-center justify-between px-1 pt-1">
             <span className="text-xs text-white/30">
-              {lastPrompt ? 'Edit and regenerate anytime' : 'Describe the site you want'}
+              {lastPrompt ? 'Starts a brand new build' : 'Describe the site you want'}
             </span>
             <div className="flex items-center gap-2">
               {lastPrompt && (
                 <button
                   onClick={() => handleGenerate(lastPrompt)}
-                  disabled={loading}
+                  disabled={busy}
                   className="rounded-lg bg-white/5 hover:bg-white/10 text-white/80 px-4 py-2 text-sm font-medium border border-white/10 transition-colors disabled:opacity-50"
                 >
                   Regenerate
@@ -147,14 +231,14 @@ export default function LivePreview() {
               )}
               <button
                 onClick={() => handleGenerate()}
-                disabled={loading}
+                disabled={busy}
                 className="rounded-lg px-5 py-2 text-sm font-semibold text-black transition-all disabled:opacity-50"
                 style={{
                   background: 'linear-gradient(90deg, #00e5ff, #ff6b35)',
                   boxShadow: '0 0 16px rgba(0,229,255,0.3)',
                 }}
               >
-                {loading ? 'Forging…' : 'Build'}
+                {status === 'generating' ? 'Generating…' : status === 'booting' ? 'Booting…' : 'Build'}
               </button>
             </div>
           </div>
@@ -173,6 +257,14 @@ export default function LivePreview() {
             Booting live sandbox… this can take up to a minute.
           </p>
         )}
+        {status === 'editing' && (
+          <p className="text-white/60 text-sm animate-pulse">Applying your edit…</p>
+        )}
+        {status === 'repairing' && (
+          <p className="text-white/60 text-sm animate-pulse">
+            Something broke — the AI is fixing it automatically…
+          </p>
+        )}
         {status === 'error' && (
           <div className="text-left text-xs text-red-400 p-4 overflow-auto max-h-[480px] w-full whitespace-pre-wrap font-mono">
             <p className="mb-2 font-semibold">Something went wrong. Try Regenerate.</p>
@@ -183,6 +275,34 @@ export default function LivePreview() {
           <iframe src={previewUrl} className="w-full h-full" title="Live preview" />
         )}
       </div>
+
+      {status === 'ready' && previewUrl && (
+        <div className="max-w-2xl mx-auto w-full">
+          <div className="rounded-2xl border border-orange-400/20 focus-within:border-orange-400/50 bg-white/[0.03] backdrop-blur-sm p-3 transition-colors">
+            <textarea
+              value={editPrompt}
+              onChange={(e) => setEditPrompt(e.target.value)}
+              placeholder="Make the button blue, add a contact form..."
+              rows={2}
+              className="w-full bg-transparent resize-none px-2 py-1.5 text-sm placeholder:text-white/30 focus:outline-none"
+            />
+            <div className="flex items-center justify-between px-1 pt-1">
+              <span className="text-xs text-white/30">Edits apply to the live sandbox</span>
+              <button
+                onClick={handleEdit}
+                disabled={busy || !editPrompt}
+                className="rounded-lg px-5 py-2 text-sm font-semibold text-black transition-all disabled:opacity-50"
+                style={{
+                  background: 'linear-gradient(90deg, #ff6b35, #00e5ff)',
+                  boxShadow: '0 0 16px rgba(255,107,53,0.25)',
+                }}
+              >
+                Apply Edit
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
-    }
+}
