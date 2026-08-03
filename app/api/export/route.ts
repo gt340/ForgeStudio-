@@ -47,12 +47,12 @@ export async function POST(req: Request) {
     '# ForgeStudio Export\n\nRun locally:\n\n```\nnpm install\nnpm run dev\n```\n'
   );
 
-  const blob = await zip.generateAsync({ type: 'nodebuffer' });
+  const buffer = await zip.generateAsync({ type: 'nodebuffer' });
 
-  return new Response(blob, {
+  return new Response(new Uint8Array(buffer), {
     headers: {
       'Content-Type': 'application/zip',
       'Content-Disposition': 'attachment; filename="forgestudio-export.zip"',
     },
   });
-}
+           }
