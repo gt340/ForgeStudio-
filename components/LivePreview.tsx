@@ -275,6 +275,27 @@ export default function LivePreview() {
           <iframe src={previewUrl} className="w-full h-full" title="Live preview" />
         )}
       </div>
+      <div className="flex justify-center mt-3">
+            <button
+              onClick={async () => {
+                if (!code) return;
+                const res = await fetch('/api/export', {
+                  method: 'POST',
+                  body: JSON.stringify({ code }),
+                });
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'forgestudio-export.zip';
+                a.click();
+                URL.revokeObjectURL(url);
+              }}
+              className="text-xs text-white/50 hover:text-cyan-300 underline underline-offset-2 transition-colors"
+            >
+              Export as ZIP
+            </button>
+          </div>
 
       {status === 'ready' && previewUrl && (
         <div className="max-w-2xl mx-auto w-full">
