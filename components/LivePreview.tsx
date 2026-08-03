@@ -16,7 +16,7 @@ function buildSandboxFiles(componentCode: string) {
         private: true,
         scripts: { dev: 'next dev' },
         dependencies: {
-          next: '14.2.5',
+          next: '14.2.32',
           react: '18.3.1',
           'react-dom': '18.3.1',
         },
