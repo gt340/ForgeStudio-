@@ -53,4 +53,4 @@ ${RULES}`;
   const block = message.content[0];
   const text = block.type === 'text' ? block.text : '';
   return Response.json({ code: text });
-      }
+}
