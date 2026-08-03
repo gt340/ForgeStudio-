@@ -15,7 +15,7 @@ export async function POST(req: Request) {
   }
 
   await sandbox.commands.run(
-    'cd /home/user/project && (npm install && npm run dev -- --host 0.0.0.0 --port 3000) > /home/user/project/dev.log 2>&1',
+    'cd /home/user/project && (npm install && npm run dev -- --hostname 0.0.0.0 --port 3000) > /home/user/project/dev.log 2>&1',
     { background: true }
   );
 
