@@ -10,6 +10,9 @@ function stripFences(text: string) {
 
 function buildSandboxFiles(componentCode: string) {
   return {
+    const clientCode = componentCode.trimStart().startsWith("'use client'")
+    ? componentCode
+    : `'use client';\n${componentCode}`;
     'package.json': JSON.stringify(
       {
         name: 'forgestudio-preview',
@@ -33,7 +36,7 @@ function buildSandboxFiles(componentCode: string) {
       '    </html>\n' +
       '  );\n' +
       '}\n',
-    'app/page.js': componentCode,
+    'app/page.js': clientCode,
   };
 }
 
