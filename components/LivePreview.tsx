@@ -6,6 +6,8 @@ function stripFences(text: string) {
     .replace(/^```(jsx|tsx|js|javascript|typescript)?\n?/i, '')
     .replace(/```\s*$/, '')
     .trim();
+}
+
 function buildSandboxFiles(componentCode: string) {
   const clientCode = componentCode.trimStart().startsWith("'use client'")
     ? componentCode
@@ -37,7 +39,8 @@ function buildSandboxFiles(componentCode: string) {
       '}\n',
     'app/page.js': clientCode,
   };
-      }
+}
+
 type PollResult = { ready: true; url: string } | { ready: false; log: string };
 
 export default function LivePreview() {
@@ -378,4 +381,4 @@ export default function LivePreview() {
       )}
     </div>
   );
-}
+    }
