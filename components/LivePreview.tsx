@@ -51,6 +51,9 @@ export default function LivePreview() {
   >('idle');
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [debugLog, setDebugLog] = useState('');
+  const [repoName, setRepoName] = useState('');
+  const [githubStatus, setGithubStatus] = useState<'idle' | 'pushing' | 'done' | 'error'>('idle');
+  const [githubUrl, setGithubUrl] = useState<string | null>(null);
 
   async function pollStatus(sbId: string): Promise<PollResult> {
     const maxAttempts = 40;
@@ -125,6 +128,8 @@ export default function LivePreview() {
     setPreviewUrl(null);
     setDebugLog('');
     setSandboxId(null);
+    setGithubStatus('idle');
+    setGithubUrl(null);
 
     try {
       const genRes = await fetch('/api/generate', {
@@ -275,27 +280,73 @@ export default function LivePreview() {
           <iframe src={previewUrl} className="w-full h-full" title="Live preview" />
         )}
       </div>
+
       <div className="flex justify-center mt-3">
-            <button
-              onClick={async () => {
-                if (!code) return;
-                const res = await fetch('/api/export', {
+        <button
+          onClick={async () => {
+            if (!code) return;
+            const res = await fetch('/api/export', {
+              method: 'POST',
+              body: JSON.stringify({ code }),
+            });
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'forgestudio-export.zip';
+            a.click();
+            URL.revokeObjectURL(url);
+          }}
+          className="text-xs text-white/50 hover:text-cyan-300 underline underline-offset-2 transition-colors"
+        >
+          Export as ZIP
+        </button>
+      </div>
+
+      {status === 'ready' && previewUrl && (
+        <div className="flex flex-col items-center gap-2 mt-3">
+          <input
+            value={repoName}
+            onChange={(e) => setRepoName(e.target.value)}
+            placeholder="repo-name"
+            className="text-xs bg-black/30 border border-white/10 rounded px-3 py-1.5 text-white/80 placeholder:text-white/30 focus:outline-none focus:border-cyan-400/40"
+          />
+          <button
+            onClick={async () => {
+              if (!code || !repoName) return;
+              setGithubStatus('pushing');
+              try {
+                const res = await fetch('/api/deploy/github', {
                   method: 'POST',
-                  body: JSON.stringify({ code }),
+                  body: JSON.stringify({ code, repoName }),
                 });
-                const blob = await res.blob();
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'forgestudio-export.zip';
-                a.click();
-                URL.revokeObjectURL(url);
-              }}
-              className="text-xs text-white/50 hover:text-cyan-300 underline underline-offset-2 transition-colors"
-            >
-              Export as ZIP
-            </button>
-          </div>
+                const data = await res.json();
+                if (data.url) {
+                  setGithubUrl(data.url);
+                  setGithubStatus('done');
+                } else {
+                  setGithubStatus('error');
+                }
+              } catch (e) {
+                console.error(e);
+                setGithubStatus('error');
+              }
+            }}
+            disabled={!repoName || githubStatus === 'pushing'}
+            className="text-xs text-white/50 hover:text-cyan-300 underline underline-offset-2 transition-colors disabled:opacity-40"
+          >
+            {githubStatus === 'pushing' ? 'Pushing to GitHub…' : 'Push to GitHub'}
+          </button>
+          {githubStatus === 'done' && githubUrl && (
+            <a href={githubUrl} target="_blank" rel="noreferrer" className="text-xs text-cyan-300 underline">
+              View repo →
+            </a>
+          )}
+          {githubStatus === 'error' && (
+            <p className="text-xs text-red-400">Push failed — is GitHub connected?</p>
+          )}
+        </div>
+      )}
 
       {status === 'ready' && previewUrl && (
         <div className="max-w-2xl mx-auto w-full">
