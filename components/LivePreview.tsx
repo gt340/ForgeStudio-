@@ -6,13 +6,12 @@ function stripFences(text: string) {
     .replace(/^```(jsx|tsx|js|javascript|typescript)?\n?/i, '')
     .replace(/```\s*$/, '')
     .trim();
-}
-
 function buildSandboxFiles(componentCode: string) {
-  return {
-    const clientCode = componentCode.trimStart().startsWith("'use client'")
+  const clientCode = componentCode.trimStart().startsWith("'use client'")
     ? componentCode
     : `'use client';\n${componentCode}`;
+
+  return {
     'package.json': JSON.stringify(
       {
         name: 'forgestudio-preview',
@@ -38,8 +37,7 @@ function buildSandboxFiles(componentCode: string) {
       '}\n',
     'app/page.js': clientCode,
   };
-}
-
+      }
 type PollResult = { ready: true; url: string } | { ready: false; log: string };
 
 export default function LivePreview() {
