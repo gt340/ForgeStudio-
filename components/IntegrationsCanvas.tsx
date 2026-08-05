@@ -16,7 +16,8 @@ const AVAILABLE = [
   { name: 'Cloudflare', color: '#f38020' },
   { name: 'Paystack', color: '#00c3f7' },
   { name: 'Google Business', color: '#4285f4' },
-];
+    { name: 'Vercel', color: '#000000' },
+  ];
 
 export default function IntegrationsCanvas() {
   const [connected, setConnected] = useState<Integration[]>([]);
@@ -92,6 +93,10 @@ export default function IntegrationsCanvas() {
     }
     if (provider === 'Slack') {
       window.location.href = '/api/auth/slack/start';
+      return;
+    }
+    if (provider === 'Vercel') {
+      window.location.href = '/api/auth/vercel';
       return;
     }
     if (provider === 'Supabase') {
