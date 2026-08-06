@@ -8,10 +8,40 @@ function stripFences(text: string) {
     .trim();
 }
 
-function buildSandboxFiles(componentCode: string) {
-  const clientCode = componentCode.trimStart().startsWith("'use client'")
-    ? componentCode
-    : `'use client';\n${componentCode}`;
+async function resolveImagePlaceholders(code: string): Promise<string> {
+  const pattern = /\{\{(IMG|VIDEO):([^}]+)\}\}/g;
+  const matches = [...code.matchAll(pattern)];
+  if (matches.length === 0) return code;
+
+  let result = code;
+  for (const match of matches) {
+    const [fullMatch, kind, query] = match;
+    try {
+      const res = await fetch('/api/images/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: query.trim(),
+          type: kind === 'VIDEO' ? 'video' : 'photo',
+        }),
+      });
+      const data = await res.json();
+      const url = data.url || 'https://via.placeholder.com/1200x800?text=Image';
+      result = result.split(fullMatch).join(url);
+    } catch (e) {
+      console.error('Image resolve failed:', e);
+      result = result.split(fullMatch).join('https://via.placeholder.com/1200x800?text=Image');
+    }
+  }
+  return result;
+}
+
+async function buildSandboxFiles(componentCode: string) {
+  const resolvedCode = await resolveImagePlaceholders(componentCode);
+
+  const clientCode = resolvedCode.trimStart().startsWith("'use client'")
+    ? resolvedCode
+    : `'use client';\n${resolvedCode}`;
 
   return {
     'package.json': JSON.stringify(
@@ -107,7 +137,7 @@ export default function LivePreview() {
         const fixedCode = stripFences(repairData.code);
         setCode(fixedCode);
 
-        const files = buildSandboxFiles(fixedCode);
+        const files = await buildSandboxFiles(fixedCode);
         await fetch('/api/sandbox/update', {
           method: 'POST',
           body: JSON.stringify({ sandboxId: sbId, files }),
@@ -145,7 +175,7 @@ export default function LivePreview() {
       setCode(newCode);
 
       setStatus('booting');
-      const files = buildSandboxFiles(newCode);
+      const files = await buildSandboxFiles(newCode);
 
       const createRes = await fetch('/api/sandbox/create', {
         method: 'POST',
@@ -184,7 +214,7 @@ export default function LivePreview() {
       const newCode = stripFences(genData.code);
       setCode(newCode);
 
-      const files = buildSandboxFiles(newCode);
+      const files = await buildSandboxFiles(newCode);
       await fetch('/api/sandbox/update', {
         method: 'POST',
         body: JSON.stringify({ sandboxId, files }),
@@ -381,4 +411,4 @@ export default function LivePreview() {
       )}
     </div>
   );
-    }
+  }
