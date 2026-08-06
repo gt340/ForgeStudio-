@@ -8,7 +8,8 @@ const RULES = `Rules:
 - Use inline styles only, as plain JS objects (style={{ key: "value" }}).
 - Never use double quotes inside string values — use plain text with no quote marks, apostrophes, or special characters.
 - Never use template literals or backticks.
-- Keep all image URLs short and complete: use https://picsum.photos/400/300 style URLs only, never truncate a URL.
+- For any image, do NOT invent a URL. Instead use this exact placeholder pattern as the src: {{IMG:short descriptive keywords}} — example: src="{{IMG:barber cutting mens hair modern barbershop}}". Keep each keyword phrase 3 to 6 words, specific to what the image should actually show based on the business described.
+- For at most one hero/banner background video, use this pattern instead: {{VIDEO:short descriptive keywords}}
 - Keep the component under 100 lines total.
 - Return ONLY raw code. No markdown, no code fences, no explanation, no comments.`;
 
