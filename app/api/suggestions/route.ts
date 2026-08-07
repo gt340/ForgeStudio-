@@ -11,7 +11,15 @@ export async function POST(req: Request) {
 
 Suggest exactly 4 professional features this type of business website should have, that are not already obviously part of a basic landing page. Think like an expert web consultant advising a small business owner who knows nothing about websites.
 
-For each suggestion, decide if it just needs to be added to the page (like a menu, gallery, testimonials, map, FAQ) or if it genuinely needs to save real data somewhere (like a newsletter signup, an order form, a booking form, a contact form that should notify the owner).
+Consider these common categories and pick whichever genuinely fit this specific business (do not force all of them, only the relevant ones):
+- Online payment (e.g. for shops, restaurants, service businesses selling products or packages)
+- WhatsApp chat button (great for local businesses where customers prefer messaging over calling or emailing)
+- Booking or appointment scheduling (for barbershops, salons, clinics, consultants, repair services, anything appointment-based)
+- Newsletter or email signup (for building a returning audience)
+- Contact or inquiry form (for service businesses that need leads)
+- Photo gallery, menu, testimonials, FAQ, or map (for building trust and showing what the business offers)
+
+For each suggestion, decide if it just needs to be added to the page visually (like a menu, gallery, testimonials, map, FAQ) or if it genuinely needs to save or send real data somewhere (like WhatsApp, payment, booking, newsletter signup, contact form).
 
 Return ONLY a raw JSON array, no markdown, no explanation, in this exact shape:
 [
