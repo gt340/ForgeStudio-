@@ -59,6 +59,7 @@ async function buildSandboxFiles(componentCode: string) {
           next: '14.2.32',
           react: '18.3.1',
           'react-dom': '18.3.1',
+          '@supabase/supabase-js': '2.45.4',
         },
       },
       null,
@@ -99,7 +100,7 @@ export default function LivePreview() {
   const [lastRepairCount, setLastRepairCount] = useState(0);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [expandedSuggestion, setExpandedSuggestion] = useState<string | null>(null);
-  const [suggestionStatus, setSuggestionStatus] = useState<Record<string, 'idle' | 'applying' | 'done'>>({});
+  const [suggestionStatus, setSuggestionStatus] = useState<Record<string, 'idle' | 'applying' | 'done' | 'error'>>({});
 
   async function pollStatus(sbId: string): Promise<PollResult> {
     const maxAttempts = 40;
@@ -206,7 +207,52 @@ export default function LivePreview() {
       setSuggestionStatus((prev) => ({ ...prev, [s.id]: 'done' }));
     } catch (e) {
       console.error(e);
-      setSuggestionStatus((prev) => ({ ...prev, [s.id]: 'idle' }));
+      setSuggestionStatus((prev) => ({ ...prev, [s.id]: 'error' }));
+    }
+  }
+
+  async function applyConnectedSuggestion(s: Suggestion) {
+    if (!code || !sandboxId) return;
+    setExpandedSuggestion(null);
+    setSuggestionStatus((prev) => ({ ...prev, [s.id]: 'applying' }));
+
+    try {
+      const setupRes = await fetch('/api/supabase/setup-table', { method: 'POST' });
+      const setupData = await setupRes.json();
+
+      if (setupData.error || !setupData.projectUrl || !setupData.anonKey) {
+        console.error('Supabase setup failed:', setupData.error);
+        setSuggestionStatus((prev) => ({ ...prev, [s.id]: 'error' }));
+        return;
+      }
+
+      const instruction = `Add this feature to the website: ${s.label} — ${s.description}
+
+Wire it to a real database using supabase-js, already installed. Use exactly this setup:
+import { createClient } from '@supabase/supabase-js';
+const supabase = createClient('${setupData.projectUrl}', '${setupData.anonKey}');
+
+On form submit, call e.preventDefault(), then insert one row into the table '${setupData.tableName}' with columns: source (set to a short string describing this feature, e.g. newsletter or contact or booking), name, email, phone, message (use empty string for any field not collected by this form). After a successful insert, show a confirmation message using component state, like Thanks we will be in touch. If the insert fails, show a simple error message instead.`;
+
+      const genRes = await fetch('/api/generate', {
+        method: 'POST',
+        body: JSON.stringify({ prompt: instruction, existingCode: code }),
+      });
+      const genData = await genRes.json();
+      const newCode = stripFences(genData.code);
+      setCode(newCode);
+
+      const files = await buildSandboxFiles(newCode);
+      await fetch('/api/sandbox/update', {
+        method: 'POST',
+        body: JSON.stringify({ sandboxId, files }),
+      });
+
+      await resolveBuild(sandboxId, newCode, instruction);
+      setSuggestionStatus((prev) => ({ ...prev, [s.id]: 'done' }));
+    } catch (e) {
+      console.error(e);
+      setSuggestionStatus((prev) => ({ ...prev, [s.id]: 'error' }));
     }
   }
 
@@ -403,6 +449,8 @@ export default function LivePreview() {
                     ? 'Adding…'
                     : suggestionStatus[s.id] === 'done'
                     ? `✓ ${s.label}`
+                    : suggestionStatus[s.id] === 'error'
+                    ? `⚠ ${s.label}`
                     : `+ ${s.label}`}
                 </button>
                 {expandedSuggestion === s.id && (
@@ -413,16 +461,26 @@ export default function LivePreview() {
                     </p>
                     {s.needsBackend && (
                       <p className="text-white/40">
-                        <span className="text-orange-300 font-medium">Connected:</span> saves real data using Supabase — coming in the next update.
+                        <span className="text-orange-300 font-medium">Connected:</span> saves real submissions using your connected Supabase database.
                       </p>
                     )}
-                    <button
-                      onClick={() => applySuggestion(s)}
-                      className="w-full rounded-lg px-3 py-1.5 text-xs font-semibold text-black transition-all"
-                      style={{ background: 'linear-gradient(90deg, #00e5ff, #ff6b35)' }}
-                    >
-                      Quick add
-                    </button>
+                    <div className="flex flex-col gap-1.5 pt-1">
+                      <button
+                        onClick={() => applySuggestion(s)}
+                        className="w-full rounded-lg px-3 py-1.5 text-xs font-semibold text-black transition-all"
+                        style={{ background: 'linear-gradient(90deg, #00e5ff, #ff6b35)' }}
+                      >
+                        Quick add
+                      </button>
+                      {s.needsBackend && (
+                        <button
+                          onClick={() => applyConnectedSuggestion(s)}
+                          className="w-full rounded-lg px-3 py-1.5 text-xs font-semibold text-white border border-orange-400/40 hover:bg-orange-400/10 transition-all"
+                        >
+                          Connect & add
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
@@ -527,4 +585,4 @@ export default function LivePreview() {
       )}
     </div>
   );
-          }
+    }
