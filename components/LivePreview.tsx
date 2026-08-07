@@ -94,6 +94,8 @@ export default function LivePreview() {
   const [repoName, setRepoName] = useState('');
   const [githubStatus, setGithubStatus] = useState<'idle' | 'pushing' | 'done' | 'error'>('idle');
   const [githubUrl, setGithubUrl] = useState<string | null>(null);
+  const [repairAttempt, setRepairAttempt] = useState(0);
+  const [lastRepairCount, setLastRepairCount] = useState(0);
 
   async function pollStatus(sbId: string): Promise<PollResult> {
     const maxAttempts = 40;
@@ -125,11 +127,13 @@ export default function LivePreview() {
     if (result.ready) {
       setPreviewUrl(result.url);
       setStatus('ready');
+      setLastRepairCount(attempt);
       return;
     }
 
     if (attempt < 2) {
       setStatus('repairing');
+      setRepairAttempt(attempt + 1);
       try {
         const repairRes = await fetch('/api/generate', {
           method: 'POST',
@@ -170,6 +174,8 @@ export default function LivePreview() {
     setSandboxId(null);
     setGithubStatus('idle');
     setGithubUrl(null);
+    setRepairAttempt(0);
+    setLastRepairCount(0);
 
     try {
       const genRes = await fetch('/api/generate', {
@@ -210,6 +216,8 @@ export default function LivePreview() {
     setLoading(true);
     setStatus('editing');
     setDebugLog('');
+    setRepairAttempt(0);
+    setLastRepairCount(0);
 
     try {
       const genRes = await fetch('/api/generate', {
@@ -307,7 +315,7 @@ export default function LivePreview() {
         )}
         {status === 'repairing' && (
           <p className="text-white/60 text-sm animate-pulse">
-            Something broke — the AI is fixing it automatically…
+            Something broke — the AI is fixing it automatically… (attempt {repairAttempt} of 2)
           </p>
         )}
         {status === 'error' && (
@@ -320,6 +328,14 @@ export default function LivePreview() {
           <iframe src={previewUrl} className="w-full h-full" title="Live preview" />
         )}
       </div>
+
+      {status === 'ready' && lastRepairCount > 0 && (
+        <div className="text-center -mt-3">
+          <span className="text-xs text-cyan-300/80">
+            ✓ Auto-fixed {lastRepairCount} {lastRepairCount === 1 ? 'issue' : 'issues'} automatically
+          </span>
+        </div>
+      )}
 
       <div className="flex justify-center mt-3">
         <button
@@ -417,4 +433,4 @@ export default function LivePreview() {
       )}
     </div>
   );
-    }
+         }
