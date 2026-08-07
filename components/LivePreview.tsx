@@ -78,6 +78,7 @@ async function buildSandboxFiles(componentCode: string) {
 }
 
 type PollResult = { ready: true; url: string } | { ready: false; log: string };
+type Suggestion = { id: string; label: string; description: string; needsBackend: boolean };
 
 export default function LivePreview() {
   const [prompt, setPrompt] = useState('');
@@ -96,6 +97,9 @@ export default function LivePreview() {
   const [githubUrl, setGithubUrl] = useState<string | null>(null);
   const [repairAttempt, setRepairAttempt] = useState(0);
   const [lastRepairCount, setLastRepairCount] = useState(0);
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [expandedSuggestion, setExpandedSuggestion] = useState<string | null>(null);
+  const [suggestionStatus, setSuggestionStatus] = useState<Record<string, 'idle' | 'applying' | 'done'>>({});
 
   async function pollStatus(sbId: string): Promise<PollResult> {
     const maxAttempts = 40;
@@ -163,6 +167,49 @@ export default function LivePreview() {
     setStatus('error');
   }
 
+  async function fetchSuggestions(p: string) {
+    try {
+      const res = await fetch('/api/suggestions', {
+        method: 'POST',
+        body: JSON.stringify({ prompt: p }),
+      });
+      const data = await res.json();
+      setSuggestions(data.suggestions || []);
+    } catch (e) {
+      console.error('Failed to fetch suggestions:', e);
+    }
+  }
+
+  async function applySuggestion(s: Suggestion) {
+    if (!code || !sandboxId) return;
+    setExpandedSuggestion(null);
+    setSuggestionStatus((prev) => ({ ...prev, [s.id]: 'applying' }));
+
+    const instruction = `Add this feature to the website: ${s.label} — ${s.description}`;
+
+    try {
+      const genRes = await fetch('/api/generate', {
+        method: 'POST',
+        body: JSON.stringify({ prompt: instruction, existingCode: code }),
+      });
+      const genData = await genRes.json();
+      const newCode = stripFences(genData.code);
+      setCode(newCode);
+
+      const files = await buildSandboxFiles(newCode);
+      await fetch('/api/sandbox/update', {
+        method: 'POST',
+        body: JSON.stringify({ sandboxId, files }),
+      });
+
+      await resolveBuild(sandboxId, newCode, instruction);
+      setSuggestionStatus((prev) => ({ ...prev, [s.id]: 'done' }));
+    } catch (e) {
+      console.error(e);
+      setSuggestionStatus((prev) => ({ ...prev, [s.id]: 'idle' }));
+    }
+  }
+
   async function handleGenerate(usePrompt?: string) {
     const p = usePrompt ?? prompt;
     if (!p) return;
@@ -176,6 +223,9 @@ export default function LivePreview() {
     setGithubUrl(null);
     setRepairAttempt(0);
     setLastRepairCount(0);
+    setSuggestions([]);
+    setExpandedSuggestion(null);
+    setSuggestionStatus({});
 
     try {
       const genRes = await fetch('/api/generate', {
@@ -203,6 +253,7 @@ export default function LivePreview() {
       setSandboxId(createData.sandboxId);
 
       await resolveBuild(createData.sandboxId, newCode, p);
+      fetchSuggestions(p);
     } catch (e) {
       console.error(e);
       setStatus('error');
@@ -337,6 +388,49 @@ export default function LivePreview() {
         </div>
       )}
 
+      {status === 'ready' && suggestions.length > 0 && (
+        <div className="max-w-2xl mx-auto w-full space-y-3">
+          <p className="text-xs text-white/40 text-center">Want to make this even more professional?</p>
+          <div className="flex flex-wrap gap-2 justify-center">
+            {suggestions.map((s) => (
+              <div key={s.id} className="flex flex-col items-center">
+                <button
+                  onClick={() => setExpandedSuggestion(expandedSuggestion === s.id ? null : s.id)}
+                  disabled={suggestionStatus[s.id] === 'applying'}
+                  className="text-xs rounded-full border border-cyan-400/30 bg-white/5 hover:bg-white/10 text-white/80 px-3 py-1.5 transition-colors disabled:opacity-50"
+                >
+                  {suggestionStatus[s.id] === 'applying'
+                    ? 'Adding…'
+                    : suggestionStatus[s.id] === 'done'
+                    ? `✓ ${s.label}`
+                    : `+ ${s.label}`}
+                </button>
+                {expandedSuggestion === s.id && (
+                  <div className="mt-2 w-64 text-xs text-white/60 bg-black/40 border border-white/10 rounded-lg p-3 space-y-2 text-left">
+                    <p>{s.description}</p>
+                    <p className="text-white/40">
+                      <span className="text-cyan-300 font-medium">Quick add:</span> adds this to your page right now.
+                    </p>
+                    {s.needsBackend && (
+                      <p className="text-white/40">
+                        <span className="text-orange-300 font-medium">Connected:</span> saves real data using Supabase — coming in the next update.
+                      </p>
+                    )}
+                    <button
+                      onClick={() => applySuggestion(s)}
+                      className="w-full rounded-lg px-3 py-1.5 text-xs font-semibold text-black transition-all"
+                      style={{ background: 'linear-gradient(90deg, #00e5ff, #ff6b35)' }}
+                    >
+                      Quick add
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="flex justify-center mt-3">
         <button
           onClick={async () => {
@@ -433,4 +527,4 @@ export default function LivePreview() {
       )}
     </div>
   );
-         }
+          }
