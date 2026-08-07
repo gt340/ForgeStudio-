@@ -13,25 +13,31 @@ async function resolveImagePlaceholders(code: string): Promise<string> {
   const matches = [...code.matchAll(pattern)];
   if (matches.length === 0) return code;
 
+  const uniqueMatches = Array.from(new Map(matches.map((m) => [m[0], m])).values());
+
+  const resolved = await Promise.all(
+    uniqueMatches.map(async ([fullMatch, kind, query]) => {
+      try {
+        const res = await fetch('/api/images/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            query: query.trim(),
+            type: kind === 'VIDEO' ? 'video' : 'photo',
+          }),
+        });
+        const data = await res.json();
+        return [fullMatch, data.url || 'https://via.placeholder.com/1200x800?text=Image'] as const;
+      } catch (e) {
+        console.error('Image resolve failed:', e);
+        return [fullMatch, 'https://via.placeholder.com/1200x800?text=Image'] as const;
+      }
+    })
+  );
+
   let result = code;
-  for (const match of matches) {
-    const [fullMatch, kind, query] = match;
-    try {
-      const res = await fetch('/api/images/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query: query.trim(),
-          type: kind === 'VIDEO' ? 'video' : 'photo',
-        }),
-      });
-      const data = await res.json();
-      const url = data.url || 'https://via.placeholder.com/1200x800?text=Image';
-      result = result.split(fullMatch).join(url);
-    } catch (e) {
-      console.error('Image resolve failed:', e);
-      result = result.split(fullMatch).join('https://via.placeholder.com/1200x800?text=Image');
-    }
+  for (const [fullMatch, url] of resolved) {
+    result = result.split(fullMatch).join(url);
   }
   return result;
 }
@@ -411,4 +417,4 @@ export default function LivePreview() {
       )}
     </div>
   );
-  }
+    }
