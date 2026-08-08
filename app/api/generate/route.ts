@@ -10,7 +10,8 @@ const RULES = `Rules:
 - Never use template literals or backticks.
 - For any image, do NOT invent a URL. Instead use this exact placeholder pattern as the src: {{IMG:short descriptive keywords}} — example: src="{{IMG:barber cutting mens hair modern barbershop}}". Keep each keyword phrase 3 to 6 words, specific to what the image should actually show based on the business described.
 - For at most one hero/banner background video, use this pattern instead: {{VIDEO:short descriptive keywords}}
-- Keep the component under 160 lines total.
+- Keep the component under 220 lines total.
+- When asked to add a new feature to existing code, you must actually implement it visibly and completely — if space is tight, simplify or shorten less essential existing content, but never silently skip the requested feature.
 - Return ONLY raw code. No markdown, no code fences, no explanation, no comments.
 
 Design standard — build this like a premium, professionally designed product, not a generic template:
