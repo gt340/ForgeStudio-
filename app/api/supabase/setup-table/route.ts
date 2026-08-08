@@ -1,11 +1,8 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
-import { NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabase';
 
-export const maxDuration = 30;
+export const maxDuration = 60;
 
-export async function POST() {
 export async function POST() {
   const { data: integration } = await supabase
     .from('integrations')
