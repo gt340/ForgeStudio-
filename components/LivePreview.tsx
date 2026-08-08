@@ -240,8 +240,8 @@ export default function LivePreview() {
         body: JSON.stringify({ sandboxId, files }),
       });
 
-      await resolveBuild(sandboxId, newCode, instruction);
-      setSuggestionStatus((prev) => ({ ...prev, [s.id]: 'done' }));
+      const success = await resolveBuild(sandboxId, newCode, instruction);
+      setSuggestionStatus((prev) => ({ ...prev, [s.id]: success ? 'done' : 'error' }));
     } catch (e) {
       console.error(e);
       setSuggestionStatus((prev) => ({ ...prev, [s.id]: 'error' }));
@@ -249,6 +249,7 @@ export default function LivePreview() {
   }
 
   async function applyConnectedSuggestion(s: Suggestion) {
+
     if (!code || !sandboxId) return;
     setExpandedSuggestion(null);
     setSuggestionStatus((prev) => ({ ...prev, [s.id]: 'applying' }));
@@ -283,8 +284,8 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
         body: JSON.stringify({ sandboxId, files }),
       });
 
-      await resolveBuild(sandboxId, newCode, instruction);
-      setSuggestionStatus((prev) => ({ ...prev, [s.id]: 'done' }));
+      const success = await resolveBuild(sandboxId, newCode, instruction);
+      setSuggestionStatus((prev) => ({ ...prev, [s.id]: success ? 'done' : 'error' }));
     } catch (e) {
       console.error(e);
       setSuggestionStatus((prev) => ({ ...prev, [s.id]: 'error' }));
