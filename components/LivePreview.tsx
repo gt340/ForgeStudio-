@@ -139,14 +139,17 @@ export default function LivePreview() {
     for (let i = 0; i < MAX_POLL_ATTEMPTS; i++) {
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
       try {
-        const res = await fetch(`/api/sandbox/status?id=${sbId}`);
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 8000);
+        const res = await fetch(`/api/sandbox/status?id=${sbId}`, { signal: controller.signal });
+        clearTimeout(timer);
         const data = await res.json();
         if (data.log) lastLog = data.log;
         if (data.ready && data.url) {
           return { ready: true, url: data.url };
         }
       } catch (e) {
-        console.error(e);
+        console.error('Status check timed out or failed, retrying:', e);
       }
     }
     return { ready: false, log: lastLog };
