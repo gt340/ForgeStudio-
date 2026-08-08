@@ -153,12 +153,11 @@ export default function LivePreview() {
   }
 
   async function resolveBuild(
-  sbId: string,
-  currentCode: string,
-  originalPrompt: string,
-  attempt = 0
-): Promise<boolean> {
-  ) {
+    sbId: string,
+    currentCode: string,
+    originalPrompt: string,
+    attempt = 0
+  ): Promise<boolean> {
     const result = await pollStatus(sbId);
 
     if (result.ready) {
@@ -167,6 +166,7 @@ export default function LivePreview() {
       setLastRepairCount(attempt);
       return true;
     }
+
     if (attempt < 2) {
       setStatus('repairing');
       setRepairAttempt(attempt + 1);
@@ -200,11 +200,6 @@ export default function LivePreview() {
     setDebugLog(result.log);
     setStatus('error');
     return false;
-  }
-    }
-
-    setDebugLog(result.log);
-    setStatus('error');
   }
 
   async function fetchSuggestions(p: string) {
@@ -249,7 +244,6 @@ export default function LivePreview() {
   }
 
   async function applyConnectedSuggestion(s: Suggestion) {
-
     if (!code || !sandboxId) return;
     setExpandedSuggestion(null);
     setSuggestionStatus((prev) => ({ ...prev, [s.id]: 'applying' }));
