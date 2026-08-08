@@ -124,6 +124,7 @@ export default function LivePreview() {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [expandedSuggestion, setExpandedSuggestion] = useState<string | null>(null);
   const [suggestionStatus, setSuggestionStatus] = useState<Record<string, 'idle' | 'applying' | 'done' | 'error'>>({});
+  const [suggestionError, setSuggestionError] = useState<Record<string, string>>({});
 
   useEffect(() => {
     const busyStates = ['generating', 'booting', 'editing', 'repairing'];
@@ -200,7 +201,7 @@ export default function LivePreview() {
       }
     }
 
-    setDebugLog(result.log);
+    setDebugLog(result.log || 'Build did not finish in time after repair attempts.');
     setStatus('error');
     return false;
   }
@@ -221,6 +222,7 @@ export default function LivePreview() {
     if (!code || !sandboxId) return;
     setExpandedSuggestion(null);
     setSuggestionStatus((prev) => ({ ...prev, [s.id]: 'applying' }));
+    setSuggestionError((prev) => ({ ...prev, [s.id]: '' }));
 
     const instruction = `Add this feature to the website: ${s.label} — ${s.description}`;
 
@@ -240,9 +242,13 @@ export default function LivePreview() {
 
       const success = await resolveBuild(sandboxId, newCode, instruction);
       setSuggestionStatus((prev) => ({ ...prev, [s.id]: success ? 'done' : 'error' }));
-    } catch (e) {
+      if (!success) {
+        setSuggestionError((prev) => ({ ...prev, [s.id]: debugLog || 'Build failed after adding this feature.' }));
+      }
+    } catch (e: any) {
       console.error(e);
       setSuggestionStatus((prev) => ({ ...prev, [s.id]: 'error' }));
+      setSuggestionError((prev) => ({ ...prev, [s.id]: e?.message || 'Something went wrong.' }));
     }
   }
 
@@ -250,6 +256,7 @@ export default function LivePreview() {
     if (!code || !sandboxId) return;
     setExpandedSuggestion(null);
     setSuggestionStatus((prev) => ({ ...prev, [s.id]: 'applying' }));
+    setSuggestionError((prev) => ({ ...prev, [s.id]: '' }));
 
     try {
       const setupData = await fetchJSON('/api/supabase/setup-table', { method: 'POST' }, 60000);
@@ -257,6 +264,7 @@ export default function LivePreview() {
       if (setupData.error || !setupData.projectUrl || !setupData.anonKey) {
         console.error('Supabase setup failed:', setupData.error);
         setSuggestionStatus((prev) => ({ ...prev, [s.id]: 'error' }));
+        setSuggestionError((prev) => ({ ...prev, [s.id]: setupData.error || 'Could not set up Supabase table.' }));
         return;
       }
 
@@ -283,9 +291,13 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
 
       const success = await resolveBuild(sandboxId, newCode, instruction);
       setSuggestionStatus((prev) => ({ ...prev, [s.id]: success ? 'done' : 'error' }));
-    } catch (e) {
+      if (!success) {
+        setSuggestionError((prev) => ({ ...prev, [s.id]: debugLog || 'Build failed after connecting this feature.' }));
+      }
+    } catch (e: any) {
       console.error(e);
       setSuggestionStatus((prev) => ({ ...prev, [s.id]: 'error' }));
+      setSuggestionError((prev) => ({ ...prev, [s.id]: e?.message || 'Something went wrong.' }));
     }
   }
 
@@ -305,6 +317,7 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
     setSuggestions([]);
     setExpandedSuggestion(null);
     setSuggestionStatus({});
+    setSuggestionError({});
 
     try {
       const genData = await fetchJSON('/api/generate', {
@@ -521,6 +534,19 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
                     </div>
                   </div>
                 )}
+                {expandedSuggestion !== s.id && suggestionStatus[s.id] === 'error' && suggestionError[s.id] && (
+                  <button
+                    onClick={() => setExpandedSuggestion(s.id)}
+                    className="mt-1 text-[10px] text-red-400 underline"
+                  >
+                    See error
+                  </button>
+                )}
+                {expandedSuggestion === s.id && suggestionStatus[s.id] === 'error' && suggestionError[s.id] && (
+                  <div className="mt-1 w-64 text-[10px] text-red-400 bg-black/40 border border-red-400/20 rounded-lg p-2 text-left whitespace-pre-wrap font-mono">
+                    {suggestionError[s.id]}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -623,4 +649,4 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
       )}
     </div>
   );
-    }
+}
