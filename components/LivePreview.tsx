@@ -153,10 +153,11 @@ export default function LivePreview() {
   }
 
   async function resolveBuild(
-    sbId: string,
-    currentCode: string,
-    originalPrompt: string,
-    attempt = 0
+  sbId: string,
+  currentCode: string,
+  originalPrompt: string,
+  attempt = 0
+): Promise<boolean> {
   ) {
     const result = await pollStatus(sbId);
 
@@ -164,9 +165,8 @@ export default function LivePreview() {
       setPreviewUrl(result.url);
       setStatus('ready');
       setLastRepairCount(attempt);
-      return;
+      return true;
     }
-
     if (attempt < 2) {
       setStatus('repairing');
       setRepairAttempt(attempt + 1);
@@ -193,8 +193,14 @@ export default function LivePreview() {
         console.error(e);
         setDebugLog(e?.message || 'Repair attempt failed');
         setStatus('error');
-        return;
+        return false;
       }
+    }
+
+    setDebugLog(result.log);
+    setStatus('error');
+    return false;
+  }
     }
 
     setDebugLog(result.log);
