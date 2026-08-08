@@ -81,6 +81,9 @@ async function buildSandboxFiles(componentCode: string) {
 type PollResult = { ready: true; url: string } | { ready: false; log: string };
 type Suggestion = { id: string; label: string; description: string; needsBackend: boolean };
 
+const POLL_INTERVAL_MS = 2000;
+const MAX_POLL_ATTEMPTS = 30; // 30 x 2s = 60s per cycle
+
 export default function LivePreview() {
   const [prompt, setPrompt] = useState('');
   const [editPrompt, setEditPrompt] = useState('');
@@ -98,15 +101,17 @@ export default function LivePreview() {
   const [githubUrl, setGithubUrl] = useState<string | null>(null);
   const [repairAttempt, setRepairAttempt] = useState(0);
   const [lastRepairCount, setLastRepairCount] = useState(0);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [expandedSuggestion, setExpandedSuggestion] = useState<string | null>(null);
   const [suggestionStatus, setSuggestionStatus] = useState<Record<string, 'idle' | 'applying' | 'done' | 'error'>>({});
 
   async function pollStatus(sbId: string): Promise<PollResult> {
-    const maxAttempts = 40;
+    setElapsedSeconds(0);
     let lastLog = '';
-    for (let i = 0; i < maxAttempts; i++) {
-      await new Promise((r) => setTimeout(r, 3000));
+    for (let i = 0; i < MAX_POLL_ATTEMPTS; i++) {
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      setElapsedSeconds((prev) => prev + POLL_INTERVAL_MS / 1000);
       try {
         const res = await fetch(`/api/sandbox/status?id=${sbId}`);
         const data = await res.json();
@@ -404,15 +409,17 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
         )}
         {status === 'booting' && (
           <p className="text-white/60 text-sm animate-pulse">
-            Booting live sandbox… this can take up to a minute.
+            Booting live sandbox… ({elapsedSeconds}s, can take up to a minute)
           </p>
         )}
         {status === 'editing' && (
-          <p className="text-white/60 text-sm animate-pulse">Applying your edit…</p>
+          <p className="text-white/60 text-sm animate-pulse">
+            Applying your edit… ({elapsedSeconds}s)
+          </p>
         )}
         {status === 'repairing' && (
           <p className="text-white/60 text-sm animate-pulse">
-            Something broke — the AI is fixing it automatically… (attempt {repairAttempt} of 2)
+            Something broke — the AI is fixing it automatically… (attempt {repairAttempt} of 2, {elapsedSeconds}s)
           </p>
         )}
         {status === 'error' && (
@@ -446,7 +453,7 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
                   className="text-xs rounded-full border border-cyan-400/30 bg-white/5 hover:bg-white/10 text-white/80 px-3 py-1.5 transition-colors disabled:opacity-50"
                 >
                   {suggestionStatus[s.id] === 'applying'
-                    ? 'Adding…'
+                    ? `Adding… (${elapsedSeconds}s)`
                     : suggestionStatus[s.id] === 'done'
                     ? `✓ ${s.label}`
                     : suggestionStatus[s.id] === 'error'
@@ -585,4 +592,4 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
       )}
     </div>
   );
-    }
+}
