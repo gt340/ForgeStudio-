@@ -1,11 +1,31 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 function stripFences(text: string) {
   return text
     .replace(/^```(jsx|tsx|js|javascript|typescript)?\n?/i, '')
     .replace(/```\s*$/, '')
     .trim();
+}
+
+async function fetchJSON(url: string, options: RequestInit, timeoutMs = 70000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`Request failed (${res.status}): ${text.slice(0, 200)}`);
+    }
+    return await res.json();
+  } catch (e: any) {
+    clearTimeout(timer);
+    if (e.name === 'AbortError') {
+      throw new Error('The AI took too long to respond (over 70s). Please try again.');
+    }
+    throw e;
+  }
 }
 
 async function resolveImagePlaceholders(code: string): Promise<string> {
@@ -18,15 +38,14 @@ async function resolveImagePlaceholders(code: string): Promise<string> {
   const resolved = await Promise.all(
     uniqueMatches.map(async ([fullMatch, kind, query]) => {
       try {
-        const res = await fetch('/api/images/search', {
+        const data = await fetchJSON('/api/images/search', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             query: query.trim(),
             type: kind === 'VIDEO' ? 'video' : 'photo',
           }),
-        });
-        const data = await res.json();
+        }, 20000);
         return [fullMatch, data.url || 'https://via.placeholder.com/1200x800?text=Image'] as const;
       } catch (e) {
         console.error('Image resolve failed:', e);
@@ -106,12 +125,19 @@ export default function LivePreview() {
   const [expandedSuggestion, setExpandedSuggestion] = useState<string | null>(null);
   const [suggestionStatus, setSuggestionStatus] = useState<Record<string, 'idle' | 'applying' | 'done' | 'error'>>({});
 
+  useEffect(() => {
+    const busyStates = ['generating', 'booting', 'editing', 'repairing'];
+    if (busyStates.includes(status)) {
+      setElapsedSeconds(0);
+      const id = setInterval(() => setElapsedSeconds((s) => s + 1), 1000);
+      return () => clearInterval(id);
+    }
+  }, [status]);
+
   async function pollStatus(sbId: string): Promise<PollResult> {
-    setElapsedSeconds(0);
     let lastLog = '';
     for (let i = 0; i < MAX_POLL_ATTEMPTS; i++) {
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-      setElapsedSeconds((prev) => prev + POLL_INTERVAL_MS / 1000);
       try {
         const res = await fetch(`/api/sandbox/status?id=${sbId}`);
         const data = await res.json();
@@ -145,7 +171,7 @@ export default function LivePreview() {
       setStatus('repairing');
       setRepairAttempt(attempt + 1);
       try {
-        const repairRes = await fetch('/api/generate', {
+        const repairData = await fetchJSON('/api/generate', {
           method: 'POST',
           body: JSON.stringify({
             prompt: originalPrompt,
@@ -153,7 +179,6 @@ export default function LivePreview() {
             errorLog: result.log,
           }),
         });
-        const repairData = await repairRes.json();
         const fixedCode = stripFences(repairData.code);
         setCode(fixedCode);
 
@@ -164,8 +189,11 @@ export default function LivePreview() {
         });
 
         return resolveBuild(sbId, fixedCode, originalPrompt, attempt + 1);
-      } catch (e) {
+      } catch (e: any) {
         console.error(e);
+        setDebugLog(e?.message || 'Repair attempt failed');
+        setStatus('error');
+        return;
       }
     }
 
@@ -175,11 +203,10 @@ export default function LivePreview() {
 
   async function fetchSuggestions(p: string) {
     try {
-      const res = await fetch('/api/suggestions', {
+      const data = await fetchJSON('/api/suggestions', {
         method: 'POST',
         body: JSON.stringify({ prompt: p }),
-      });
-      const data = await res.json();
+      }, 30000);
       setSuggestions(data.suggestions || []);
     } catch (e) {
       console.error('Failed to fetch suggestions:', e);
@@ -194,11 +221,10 @@ export default function LivePreview() {
     const instruction = `Add this feature to the website: ${s.label} — ${s.description}`;
 
     try {
-      const genRes = await fetch('/api/generate', {
+      const genData = await fetchJSON('/api/generate', {
         method: 'POST',
         body: JSON.stringify({ prompt: instruction, existingCode: code }),
       });
-      const genData = await genRes.json();
       const newCode = stripFences(genData.code);
       setCode(newCode);
 
@@ -222,8 +248,7 @@ export default function LivePreview() {
     setSuggestionStatus((prev) => ({ ...prev, [s.id]: 'applying' }));
 
     try {
-      const setupRes = await fetch('/api/supabase/setup-table', { method: 'POST' });
-      const setupData = await setupRes.json();
+      const setupData = await fetchJSON('/api/supabase/setup-table', { method: 'POST' }, 60000);
 
       if (setupData.error || !setupData.projectUrl || !setupData.anonKey) {
         console.error('Supabase setup failed:', setupData.error);
@@ -239,11 +264,10 @@ const supabase = createClient('${setupData.projectUrl}', '${setupData.anonKey}')
 
 On form submit, call e.preventDefault(), then insert one row into the table '${setupData.tableName}' with columns: source (set to a short string describing this feature, e.g. newsletter or contact or booking), name, email, phone, message (use empty string for any field not collected by this form). After a successful insert, show a confirmation message using component state, like Thanks we will be in touch. If the insert fails, show a simple error message instead.`;
 
-      const genRes = await fetch('/api/generate', {
+      const genData = await fetchJSON('/api/generate', {
         method: 'POST',
         body: JSON.stringify({ prompt: instruction, existingCode: code }),
       });
-      const genData = await genRes.json();
       const newCode = stripFences(genData.code);
       setCode(newCode);
 
@@ -279,11 +303,10 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
     setSuggestionStatus({});
 
     try {
-      const genRes = await fetch('/api/generate', {
+      const genData = await fetchJSON('/api/generate', {
         method: 'POST',
         body: JSON.stringify({ prompt: p }),
       });
-      const genData = await genRes.json();
       const newCode = stripFences(genData.code);
       setCode(newCode);
 
@@ -297,6 +320,7 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
       const createData = await createRes.json();
 
       if (!createData.sandboxId) {
+        setDebugLog('Sandbox creation failed');
         setStatus('error');
         setLoading(false);
         return;
@@ -305,8 +329,9 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
 
       await resolveBuild(createData.sandboxId, newCode, p);
       fetchSuggestions(p);
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      setDebugLog(e?.message || 'Generation failed');
       setStatus('error');
     }
     setLoading(false);
@@ -322,11 +347,10 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
     setLastRepairCount(0);
 
     try {
-      const genRes = await fetch('/api/generate', {
+      const genData = await fetchJSON('/api/generate', {
         method: 'POST',
         body: JSON.stringify({ prompt: instruction, existingCode: code }),
       });
-      const genData = await genRes.json();
       const newCode = stripFences(genData.code);
       setCode(newCode);
 
@@ -338,8 +362,9 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
 
       setEditPrompt('');
       await resolveBuild(sandboxId, newCode, instruction);
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      setDebugLog(e?.message || 'Edit failed');
       setStatus('error');
     }
     setLoading(false);
@@ -405,7 +430,9 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
           <p className="text-white/40 text-sm">Describe a site above to generate it.</p>
         )}
         {status === 'generating' && (
-          <p className="text-white/60 text-sm animate-pulse">Generating code…</p>
+          <p className="text-white/60 text-sm animate-pulse">
+            Generating code… ({elapsedSeconds}s)
+          </p>
         )}
         {status === 'booting' && (
           <p className="text-white/60 text-sm animate-pulse">
@@ -453,7 +480,7 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
                   className="text-xs rounded-full border border-cyan-400/30 bg-white/5 hover:bg-white/10 text-white/80 px-3 py-1.5 transition-colors disabled:opacity-50"
                 >
                   {suggestionStatus[s.id] === 'applying'
-                    ? `Adding… (${elapsedSeconds}s)`
+                    ? 'Adding…'
                     : suggestionStatus[s.id] === 'done'
                     ? `✓ ${s.label}`
                     : suggestionStatus[s.id] === 'error'
@@ -592,4 +619,4 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
       )}
     </div>
   );
-}
+    }
