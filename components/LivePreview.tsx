@@ -147,6 +147,7 @@ export default function LivePreview() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveError, setSaveError] = useState('');
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
 
   useEffect(() => {
     const busyStates = ['generating', 'booting', 'editing', 'repairing'];
@@ -247,15 +248,28 @@ export default function LivePreview() {
     setSaveStatus('saving');
     setSaveError('');
     try {
-      await fetchJSON('/api/projects/save', {
+      const data = await fetchJSON('/api/projects/save', {
         method: 'POST',
         body: JSON.stringify({ prompt: p, code: c, previewUrl: url, sandboxId: sbId }),
       }, 20000);
       setSaveStatus('saved');
+      if (data?.project?.id) setCurrentProjectId(data.project.id);
     } catch (e: any) {
       console.error('Failed to save project history:', e);
       setSaveStatus('error');
       setSaveError(e?.message || 'Unknown error saving to history');
+    }
+  }
+
+  async function updateProjectSnapshot(c: string, url: string) {
+    if (!currentProjectId) return;
+    try {
+      await fetchJSON('/api/projects/update', {
+        method: 'POST',
+        body: JSON.stringify({ id: currentProjectId, code: c, previewUrl: url }),
+      }, 20000);
+    } catch (e) {
+      console.error('Failed to update saved project snapshot:', e);
     }
   }
 
@@ -296,6 +310,7 @@ export default function LivePreview() {
     setSuggestionError({});
     setSaveStatus('idle');
     setSaveError('');
+    setCurrentProjectId(p.id);
 
     try {
       const files = await buildSandboxFiles(p.code);
@@ -344,7 +359,9 @@ export default function LivePreview() {
         body: JSON.stringify({ sandboxId, files }),
       });
 
-      const success = await resolveBuild(sandboxId, newCode, instruction);
+      const success = await resolveBuild(sandboxId, newCode, instruction, 0, (url, finalCode) => {
+        updateProjectSnapshot(finalCode, url);
+      });
       setSuggestionStatus((prev) => ({ ...prev, [s.id]: success ? 'done' : 'error' }));
       if (!success) {
         setSuggestionError((prev) => ({ ...prev, [s.id]: debugLog || 'Build failed after adding this feature.' }));
@@ -393,7 +410,9 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
         body: JSON.stringify({ sandboxId, files }),
       });
 
-      const success = await resolveBuild(sandboxId, newCode, instruction);
+      const success = await resolveBuild(sandboxId, newCode, instruction, 0, (url, finalCode) => {
+        updateProjectSnapshot(finalCode, url);
+      });
       setSuggestionStatus((prev) => ({ ...prev, [s.id]: success ? 'done' : 'error' }));
       if (!success) {
         setSuggestionError((prev) => ({ ...prev, [s.id]: debugLog || 'Build failed after connecting this feature.' }));
@@ -424,6 +443,7 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
     setSuggestionError({});
     setSaveStatus('idle');
     setSaveError('');
+    setCurrentProjectId(null);
 
     try {
       const genData = await fetchJSON('/api/generate', {
@@ -486,7 +506,9 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
       });
 
       setEditPrompt('');
-      await resolveBuild(sandboxId, newCode, instruction);
+      await resolveBuild(sandboxId, newCode, instruction, 0, (url, finalCode) => {
+        updateProjectSnapshot(finalCode, url);
+      });
     } catch (e: any) {
       console.error(e);
       setDebugLog(e?.message || 'Edit failed');
@@ -804,4 +826,4 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
       )}
     </div>
   );
-                                                        }
+  }
