@@ -111,6 +111,11 @@ type SavedProject = {
 const POLL_INTERVAL_MS = 2000;
 const MAX_POLL_ATTEMPTS = 30; // 30 x 2s = 60s per cycle
 
+function withCacheBuster(url: string) {
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}_r=${Date.now()}`;
+}
+
 export default function LivePreview() {
   const [prompt, setPrompt] = useState('');
   const [editPrompt, setEditPrompt] = useState('');
@@ -179,7 +184,8 @@ export default function LivePreview() {
     const result = await pollStatus(sbId);
 
     if (result.ready) {
-      setPreviewUrl(result.url);
+      const freshUrl = withCacheBuster(result.url);
+      setPreviewUrl(freshUrl);
       setStatus('ready');
       setLastRepairCount(attempt);
       if (onSuccess) onSuccess(result.url, currentCode);
@@ -794,4 +800,4 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
       )}
     </div>
   );
-            }
+          }
