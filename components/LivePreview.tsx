@@ -136,6 +136,8 @@ export default function LivePreview() {
   const [showHistory, setShowHistory] = useState(false);
   const [historyProjects, setHistoryProjects] = useState<SavedProject[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [saveError, setSaveError] = useState('');
 
   useEffect(() => {
     const busyStates = ['generating', 'booting', 'editing', 'repairing'];
@@ -232,13 +234,18 @@ export default function LivePreview() {
   }
 
   async function saveProject(p: string, c: string, url: string, sbId: string) {
+    setSaveStatus('saving');
+    setSaveError('');
     try {
       await fetchJSON('/api/projects/save', {
         method: 'POST',
         body: JSON.stringify({ prompt: p, code: c, previewUrl: url, sandboxId: sbId }),
       }, 20000);
-    } catch (e) {
+      setSaveStatus('saved');
+    } catch (e: any) {
       console.error('Failed to save project history:', e);
+      setSaveStatus('error');
+      setSaveError(e?.message || 'Unknown error saving to history');
     }
   }
 
@@ -277,6 +284,8 @@ export default function LivePreview() {
     setExpandedSuggestion(null);
     setSuggestionStatus({});
     setSuggestionError({});
+    setSaveStatus('idle');
+    setSaveError('');
 
     try {
       const files = await buildSandboxFiles(p.code);
@@ -403,6 +412,8 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
     setExpandedSuggestion(null);
     setSuggestionStatus({});
     setSuggestionError({});
+    setSaveStatus('idle');
+    setSaveError('');
 
     try {
       const genData = await fetchJSON('/api/generate', {
@@ -600,6 +611,22 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
           <span className="text-xs text-cyan-300/80">
             ✓ Auto-fixed {lastRepairCount} {lastRepairCount === 1 ? 'issue' : 'issues'} automatically
           </span>
+        </div>
+      )}
+
+      {status === 'ready' && saveStatus === 'saving' && (
+        <div className="text-center -mt-3">
+          <span className="text-xs text-white/40">Saving to history…</span>
+        </div>
+      )}
+      {status === 'ready' && saveStatus === 'saved' && (
+        <div className="text-center -mt-3">
+          <span className="text-xs text-cyan-300/80">✓ Saved to history</span>
+        </div>
+      )}
+      {status === 'ready' && saveStatus === 'error' && (
+        <div className="text-center -mt-3">
+          <span className="text-xs text-red-400">⚠ Could not save to history: {saveError}</span>
         </div>
       )}
 
