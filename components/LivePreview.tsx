@@ -8,7 +8,7 @@ function stripFences(text: string) {
     .trim();
 }
 
-async function fetchJSON(url: string, options: RequestInit, timeoutMs = 70000) {
+async function fetchJSON(url: string, options: RequestInit, timeoutMs = 45000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -22,7 +22,10 @@ async function fetchJSON(url: string, options: RequestInit, timeoutMs = 70000) {
   } catch (e: any) {
     clearTimeout(timer);
     if (e.name === 'AbortError') {
-      throw new Error('The AI took too long to respond (over 70s). Please try again.');
+      throw new Error(`The AI took too long to respond (over ${Math.round(timeoutMs / 1000)}s). Please try again.`);
+    }
+    if (e instanceof TypeError) {
+      throw new Error('Network issue — please check your connection and try again.');
     }
     throw e;
   }
@@ -109,7 +112,8 @@ type SavedProject = {
 };
 
 const POLL_INTERVAL_MS = 2000;
-const MAX_POLL_ATTEMPTS = 30; // 30 x 2s = 60s per cycle
+const MAX_POLL_ATTEMPTS = 25; // 25 x 2s = 50s per cycle
+const MAX_REPAIR_ATTEMPTS = 1;
 
 function withCacheBuster(url: string) {
   const sep = url.includes('?') ? '&' : '?';
@@ -192,7 +196,7 @@ export default function LivePreview() {
       return true;
     }
 
-    if (attempt < 2) {
+    if (attempt < MAX_REPAIR_ATTEMPTS) {
       setStatus('repairing');
       setRepairAttempt(attempt + 1);
       try {
@@ -222,7 +226,7 @@ export default function LivePreview() {
       }
     }
 
-    setDebugLog(result.log || 'Build did not finish in time after repair attempts.');
+    setDebugLog(result.log || 'Build did not finish in time after a repair attempt.');
     setStatus('error');
     return false;
   }
@@ -598,7 +602,7 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
         )}
         {status === 'repairing' && (
           <p className="text-white/60 text-sm animate-pulse">
-            Something broke — the AI is fixing it automatically… (attempt {repairAttempt} of 2, {elapsedSeconds}s)
+            Something broke — the AI is fixing it automatically… (attempt {repairAttempt} of {MAX_REPAIR_ATTEMPTS}, {elapsedSeconds}s)
           </p>
         )}
         {status === 'error' && (
@@ -800,4 +804,4 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
       )}
     </div>
   );
-          }
+                                                        }
