@@ -99,6 +99,14 @@ async function buildSandboxFiles(componentCode: string) {
 
 type PollResult = { ready: true; url: string } | { ready: false; log: string };
 type Suggestion = { id: string; label: string; description: string; needsBackend: boolean };
+type SavedProject = {
+  id: string;
+  created_at: string;
+  prompt: string;
+  code: string;
+  preview_url: string | null;
+  sandbox_id: string | null;
+};
 
 const POLL_INTERVAL_MS = 2000;
 const MAX_POLL_ATTEMPTS = 30; // 30 x 2s = 60s per cycle
@@ -125,6 +133,9 @@ export default function LivePreview() {
   const [expandedSuggestion, setExpandedSuggestion] = useState<string | null>(null);
   const [suggestionStatus, setSuggestionStatus] = useState<Record<string, 'idle' | 'applying' | 'done' | 'error'>>({});
   const [suggestionError, setSuggestionError] = useState<Record<string, string>>({});
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyProjects, setHistoryProjects] = useState<SavedProject[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   useEffect(() => {
     const busyStates = ['generating', 'booting', 'editing', 'repairing'];
@@ -160,7 +171,8 @@ export default function LivePreview() {
     sbId: string,
     currentCode: string,
     originalPrompt: string,
-    attempt = 0
+    attempt = 0,
+    onSuccess?: (url: string, finalCode: string) => void
   ): Promise<boolean> {
     const result = await pollStatus(sbId);
 
@@ -168,6 +180,7 @@ export default function LivePreview() {
       setPreviewUrl(result.url);
       setStatus('ready');
       setLastRepairCount(attempt);
+      if (onSuccess) onSuccess(result.url, currentCode);
       return true;
     }
 
@@ -192,7 +205,7 @@ export default function LivePreview() {
           body: JSON.stringify({ sandboxId: sbId, files }),
         });
 
-        return resolveBuild(sbId, fixedCode, originalPrompt, attempt + 1);
+        return resolveBuild(sbId, fixedCode, originalPrompt, attempt + 1, onSuccess);
       } catch (e: any) {
         console.error(e);
         setDebugLog(e?.message || 'Repair attempt failed');
@@ -216,6 +229,78 @@ export default function LivePreview() {
     } catch (e) {
       console.error('Failed to fetch suggestions:', e);
     }
+  }
+
+  async function saveProject(p: string, c: string, url: string, sbId: string) {
+    try {
+      await fetchJSON('/api/projects/save', {
+        method: 'POST',
+        body: JSON.stringify({ prompt: p, code: c, previewUrl: url, sandboxId: sbId }),
+      }, 20000);
+    } catch (e) {
+      console.error('Failed to save project history:', e);
+    }
+  }
+
+  async function fetchHistory() {
+    setHistoryLoading(true);
+    try {
+      const data = await fetchJSON('/api/projects/list', { method: 'GET' }, 20000);
+      setHistoryProjects(data.projects || []);
+    } catch (e) {
+      console.error('Failed to load history:', e);
+    }
+    setHistoryLoading(false);
+  }
+
+  function toggleHistory() {
+    const next = !showHistory;
+    setShowHistory(next);
+    if (next) fetchHistory();
+  }
+
+  async function openProject(p: SavedProject) {
+    setShowHistory(false);
+    setLoading(true);
+    setPrompt(p.prompt);
+    setLastPrompt(p.prompt);
+    setCode(p.code);
+    setStatus('booting');
+    setPreviewUrl(null);
+    setDebugLog('');
+    setSandboxId(null);
+    setGithubStatus('idle');
+    setGithubUrl(null);
+    setRepairAttempt(0);
+    setLastRepairCount(0);
+    setSuggestions([]);
+    setExpandedSuggestion(null);
+    setSuggestionStatus({});
+    setSuggestionError({});
+
+    try {
+      const files = await buildSandboxFiles(p.code);
+      const createRes = await fetch('/api/sandbox/create', {
+        method: 'POST',
+        body: JSON.stringify({ files }),
+      });
+      const createData = await createRes.json();
+
+      if (!createData.sandboxId) {
+        setDebugLog('Could not relaunch this saved project.');
+        setStatus('error');
+        setLoading(false);
+        return;
+      }
+      setSandboxId(createData.sandboxId);
+      await resolveBuild(createData.sandboxId, p.code, p.prompt);
+      fetchSuggestions(p.prompt);
+    } catch (e: any) {
+      console.error(e);
+      setDebugLog(e?.message || 'Failed to reopen this project');
+      setStatus('error');
+    }
+    setLoading(false);
   }
 
   async function applySuggestion(s: Suggestion) {
@@ -344,7 +429,9 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
       }
       setSandboxId(createData.sandboxId);
 
-      await resolveBuild(createData.sandboxId, newCode, p);
+      await resolveBuild(createData.sandboxId, newCode, p, 0, (url, finalCode) => {
+        saveProject(p, finalCode, url, createData.sandboxId);
+      });
       fetchSuggestions(p);
     } catch (e: any) {
       console.error(e);
@@ -392,6 +479,37 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
 
   return (
     <div className="space-y-6">
+      <div className="flex justify-end max-w-2xl mx-auto w-full">
+        <button
+          onClick={toggleHistory}
+          className="text-xs text-white/50 hover:text-cyan-300 underline underline-offset-2 transition-colors"
+        >
+          {showHistory ? 'Close history' : 'History'}
+        </button>
+      </div>
+
+      {showHistory && (
+        <div className="max-w-2xl mx-auto w-full space-y-2 rounded-2xl border border-white/10 bg-black/40 p-4">
+          <h2 className="text-sm font-semibold text-white/80">Your saved projects</h2>
+          {historyLoading && <p className="text-xs text-white/40">Loading…</p>}
+          {!historyLoading && historyProjects.length === 0 && (
+            <p className="text-xs text-white/40">No saved projects yet — build something and it will show up here.</p>
+          )}
+          <div className="space-y-2">
+            {historyProjects.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => openProject(p)}
+                className="w-full text-left rounded-lg border border-white/10 bg-white/[0.03] hover:bg-white/[0.06] px-3 py-2 transition-colors"
+              >
+                <p className="text-sm text-white/90 truncate">{p.prompt}</p>
+                <p className="text-xs text-white/40">{new Date(p.created_at).toLocaleString()}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {idle && (
         <div className="text-center pt-10 pb-2">
           <h1 className="text-3xl md:text-4xl font-bold tracking-tight">
@@ -649,4 +767,4 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
       )}
     </div>
   );
-}
+            }
