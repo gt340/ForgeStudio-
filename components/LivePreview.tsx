@@ -148,6 +148,8 @@ export default function LivePreview() {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveError, setSaveError] = useState('');
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
+  const [mcpTestLoading, setMcpTestLoading] = useState(false);
+  const [mcpTestResult, setMcpTestResult] = useState<string | null>(null);
 
   useEffect(() => {
     const busyStates = ['generating', 'booting', 'editing', 'repairing'];
@@ -157,6 +159,19 @@ export default function LivePreview() {
       return () => clearInterval(id);
     }
   }, [status]);
+
+  async function testMcp() {
+    setMcpTestLoading(true);
+    setMcpTestResult(null);
+    try {
+      const res = await fetch('/api/mcp-test', { method: 'POST' });
+      const data = await res.json();
+      setMcpTestResult(JSON.stringify(data, null, 2));
+    } catch (e: any) {
+      setMcpTestResult(`Request failed: ${e?.message || e}`);
+    }
+    setMcpTestLoading(false);
+  }
 
   async function pollStatus(sbId: string): Promise<PollResult> {
     let lastLog = '';
@@ -522,6 +537,22 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
 
   return (
     <div className="space-y-6">
+      <div className="max-w-2xl mx-auto w-full rounded-2xl border border-yellow-400/30 bg-yellow-400/5 p-4 space-y-2">
+        <p className="text-xs text-yellow-300/80 font-semibold">Temporary — MCP Phase 1 test</p>
+        <button
+          onClick={testMcp}
+          disabled={mcpTestLoading}
+          className="rounded-lg bg-yellow-400/20 hover:bg-yellow-400/30 text-yellow-200 px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50"
+        >
+          {mcpTestLoading ? 'Testing…' : 'Test MCP Connection'}
+        </button>
+        {mcpTestResult && (
+          <pre className="text-[10px] text-white/70 bg-black/40 rounded-lg p-3 overflow-auto max-h-64 whitespace-pre-wrap">
+            {mcpTestResult}
+          </pre>
+        )}
+      </div>
+
       <div className="flex justify-end max-w-2xl mx-auto w-full">
         <button
           onClick={toggleHistory}
@@ -826,4 +857,4 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
       )}
     </div>
   );
-  }
+    }
