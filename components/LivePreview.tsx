@@ -395,14 +395,22 @@ export default function LivePreview() {
     setSuggestionError((prev) => ({ ...prev, [s.id]: '' }));
 
     try {
-      const setupData = await fetchJSON('/api/supabase/setup-table', { method: 'POST' }, 60000);
+      const setupData = await fetchJSON('/api/supabase/setup-table', {
+        method: 'POST',
+        body: JSON.stringify({ feature: s.label, description: s.description }),
+      }, 60000);
 
-      if (setupData.error || !setupData.projectUrl || !setupData.anonKey) {
+      if (setupData.error || !setupData.projectUrl || !setupData.anonKey || !setupData.tableName) {
         console.error('Supabase setup failed:', setupData.error);
         setSuggestionStatus((prev) => ({ ...prev, [s.id]: 'error' }));
         setSuggestionError((prev) => ({ ...prev, [s.id]: setupData.error || 'Could not set up Supabase table.' }));
         return;
       }
+
+      const columns: { name: string; type: string }[] = Array.isArray(setupData.columns) ? setupData.columns : [];
+      const columnList = columns.length > 0
+        ? columns.map((c) => `${c.name} (${c.type})`).join(', ')
+        : 'whatever fields this form collects';
 
       const instruction = `Add this feature to the website: ${s.label} — ${s.description}
 
@@ -410,7 +418,7 @@ Wire it to a real database using supabase-js, already installed. Use exactly thi
 import { createClient } from '@supabase/supabase-js';
 const supabase = createClient('${setupData.projectUrl}', '${setupData.anonKey}');
 
-On form submit, call e.preventDefault(), then insert one row into the table '${setupData.tableName}' with columns: source (set to a short string describing this feature, e.g. newsletter or contact or booking), name, email, phone, message (use empty string for any field not collected by this form). After a successful insert, show a confirmation message using component state, like Thanks we will be in touch. If the insert fails, show a simple error message instead.`;
+On form submit, call e.preventDefault(), then insert one row into the table '${setupData.tableName}' with these columns: ${columnList}. Map the form's actual input fields onto these columns as closely as possible (use an empty string or null for any column this form doesn't collect). After a successful insert, show a confirmation message using component state, like Thanks we will be in touch. If the insert fails, show a simple error message instead.`;
 
       const genData = await fetchJSON('/api/generate', {
         method: 'POST',
@@ -857,4 +865,4 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
       )}
     </div>
   );
-    }
+              }
