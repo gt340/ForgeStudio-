@@ -32,11 +32,14 @@ export async function GET(req: Request) {
     return NextResponse.redirect(`${origin}?error=supabase_auth_failed`);
   }
 
-  await supabase.from('integrations').upsert({
-    provider: 'Supabase',
-    status: 'connected',
-    access_token: tokenData.access_token,
-  });
+  await supabase.from('integrations').upsert(
+    {
+      provider: 'Supabase',
+      status: 'connected',
+      access_token: tokenData.access_token,
+    },
+    { onConflict: 'provider' }
+  );
 
   return NextResponse.redirect(`${origin}?connected=supabase`);
 }
