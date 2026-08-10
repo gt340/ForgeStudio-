@@ -7,6 +7,6 @@ export async function GET(req: Request) {
   const origin = `${protocol}://${host}`;
   const redirectUri = `${origin}/api/auth/supabase/callback`;
   console.log("SUPABASE_REDIRECT_URI:", redirectUri);
-  const url = `https://api.supabase.com/v1/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code`;
+  const url = `https://api.supabase.com/v1/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=all`;
   return NextResponse.redirect(url);
 }
