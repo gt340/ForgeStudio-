@@ -362,9 +362,9 @@ export default function LivePreview() {
 
     try {
       const genData = await fetchJSON('/api/generate', {
-        method: 'POST',
-        body: JSON.stringify({ prompt: instruction, existingCode: code }),
-      });
+  method: 'POST',
+  body: JSON.stringify({ prompt: instruction, existingCode: code }),
+}, 60000);
       const newCode = stripFences(genData.code);
       setCode(newCode);
 
