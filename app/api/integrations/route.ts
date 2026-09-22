@@ -3,7 +3,7 @@ import { supabase } from '@/lib/supabase';
 export async function GET() {
   const { data, error } = await supabase
     .from('integrations')
-    .select('*')
+    .select('id, provider, status, created_at')
     .order('created_at', { ascending: false });
   if (error) return Response.json({ error: error.message }, { status: 500 });
   return Response.json({ integrations: data });
@@ -14,7 +14,7 @@ export async function POST(req: Request) {
   const { data, error } = await supabase
     .from('integrations')
     .insert({ provider })
-    .select()
+    .select('id, provider, status, created_at')
     .single();
   if (error) return Response.json({ error: error.message }, { status: 500 });
   return Response.json({ integration: data });
