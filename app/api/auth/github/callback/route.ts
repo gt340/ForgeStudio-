@@ -1,12 +1,17 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabase';
+import { createSupabaseServerClient, getCurrentUser } from '@/lib/supabase-server';
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const code = searchParams.get('code');
+  const origin = new URL(req.url).origin;
+
+  const user = await getCurrentUser();
+  if (!user) {
+    return NextResponse.redirect(`${origin}/login?error=not_authenticated`);
+  }
 
   if (!code) {
-    const origin = new URL(req.url).origin;
     return NextResponse.redirect(`${origin}?error=missing_code`);
   }
 
@@ -26,11 +31,16 @@ export async function GET(req: Request) {
     return NextResponse.redirect(`${origin}?error=github_auth_failed`);
   }
 
-  await supabase.from('integrations').upsert({
-    provider: 'GitHub',
-    status: 'connected',
-    access_token: tokenData.access_token,
-  });
+  const supabase = await createSupabaseServerClient();
+  await supabase.from('integrations').upsert(
+    {
+      provider: 'GitHub',
+      status: 'connected',
+      access_token: tokenData.access_token,
+      user_id: user.id,
+    },
+    { onConflict: 'user_id,provider' }
+  );
 
   return NextResponse.redirect(`${origin}?connected=github`);
 }

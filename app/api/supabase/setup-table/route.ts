@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabase';
+import { createSupabaseServerClient, getCurrentUser } from '@/lib/supabase-server';
 import Anthropic from '@anthropic-ai/sdk';
 
 export const maxDuration = 60;
@@ -20,16 +20,21 @@ async function fetchWithTimeout(url: string, options: RequestInit, ms: number) {
 }
 
 export async function POST(req: Request) {
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
   const { feature, description } = await req.json().catch(() => ({}));
 
   if (!feature) {
     return NextResponse.json({ error: 'Missing feature name' }, { status: 400 });
   }
 
+  const supabase = await createSupabaseServerClient();
   const { data: integration } = await supabase
     .from('integrations')
     .select('access_token')
     .eq('provider', 'Supabase')
+    .eq('user_id', user.id)
     .single();
 
   if (!integration?.access_token) {
@@ -148,4 +153,4 @@ Only include the feature-specific columns in "columns" (omit id/created_at).`;
       { status: 500 }
     );
   }
-      }
+}

@@ -1,17 +1,22 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabase';
+import { createSupabaseServerClient, getCurrentUser } from '@/lib/supabase-server';
 
 export const maxDuration = 60;
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export async function POST() {
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
   try {
+    const supabase = await createSupabaseServerClient();
     const { data: integration } = await supabase
       .from('integrations')
       .select('access_token')
       .eq('provider', 'Supabase')
+      .eq('user_id', user.id)
       .single();
 
     if (!integration?.access_token) {
@@ -63,4 +68,4 @@ export async function POST() {
     console.error('MCP test failed:', e);
     return NextResponse.json({ error: e?.message || 'Unknown error' }, { status: 500 });
   }
-            }
+}

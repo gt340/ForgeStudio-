@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabase';
+import { createSupabaseServerClient, getCurrentUser } from '@/lib/supabase-server';
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
@@ -7,6 +7,11 @@ export async function GET(req: Request) {
   const host = req.headers.get('x-forwarded-host') || req.headers.get('host');
   const protocol = req.headers.get('x-forwarded-proto') || 'https';
   const origin = `${protocol}://${host}`;
+
+  const user = await getCurrentUser();
+  if (!user) {
+    return NextResponse.redirect(`${origin}/login?error=not_authenticated`);
+  }
 
   if (!code) {
     return NextResponse.redirect(`${origin}?error=missing_code`);
@@ -32,13 +37,15 @@ export async function GET(req: Request) {
     return NextResponse.redirect(`${origin}?error=supabase_auth_failed`);
   }
 
+  const supabase = await createSupabaseServerClient();
   await supabase.from('integrations').upsert(
     {
       provider: 'Supabase',
       status: 'connected',
       access_token: tokenData.access_token,
+      user_id: user.id,
     },
-    { onConflict: 'provider' }
+    { onConflict: 'user_id,provider' }
   );
 
   return NextResponse.redirect(`${origin}?connected=supabase`);

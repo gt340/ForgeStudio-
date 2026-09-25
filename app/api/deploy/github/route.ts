@@ -1,21 +1,26 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabase';
+import { createSupabaseServerClient, getCurrentUser } from '@/lib/supabase-server';
 
 function toBase64(str: string) {
   return Buffer.from(str, 'utf-8').toString('base64');
 }
 
 export async function POST(req: Request) {
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
   const { code, repoName } = await req.json();
 
   if (!code || !repoName) {
     return NextResponse.json({ error: 'Missing code or repoName' }, { status: 400 });
   }
 
+  const supabase = await createSupabaseServerClient();
   const { data: integration } = await supabase
     .from('integrations')
     .select('access_token')
     .eq('provider', 'GitHub')
+    .eq('user_id', user.id)
     .single();
 
   const token = integration?.access_token;
@@ -30,7 +35,7 @@ export async function POST(req: Request) {
   };
 
   const userRes = await fetch('https://api.github.com/user', { headers });
-  const user = await userRes.json();
+  const ghUser = await userRes.json();
 
   const createRepoRes = await fetch('https://api.github.com/user/repos', {
     method: 'POST',
@@ -72,7 +77,7 @@ export async function POST(req: Request) {
 
   for (const [path, content] of Object.entries(files)) {
     await fetch(
-      `https://api.github.com/repos/${user.login}/${repoName}/contents/${path}`,
+      `https://api.github.com/repos/${ghUser.login}/${repoName}/contents/${path}`,
       {
         method: 'PUT',
         headers,
@@ -85,4 +90,4 @@ export async function POST(req: Request) {
   }
 
   return NextResponse.json({ url: repo.html_url });
-      }
+}
