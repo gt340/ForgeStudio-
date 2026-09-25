@@ -150,6 +150,8 @@ export default function LivePreview() {
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const [mcpTestLoading, setMcpTestLoading] = useState(false);
   const [mcpTestResult, setMcpTestResult] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState('');
 
   useEffect(() => {
     const busyStates = ['generating', 'booting', 'editing', 'repairing'];
@@ -303,6 +305,24 @@ export default function LivePreview() {
     const next = !showHistory;
     setShowHistory(next);
     if (next) fetchHistory();
+  }
+
+  async function deleteProject(id: string) {
+    if (!window.confirm('Delete this project? This cannot be undone.')) return;
+    setDeletingId(id);
+    setDeleteError('');
+    try {
+      await fetchJSON('/api/projects/delete', {
+        method: 'POST',
+        body: JSON.stringify({ id }),
+      }, 20000);
+      setHistoryProjects((prev) => prev.filter((p) => p.id !== id));
+      if (currentProjectId === id) setCurrentProjectId(null);
+    } catch (e: any) {
+      console.error('Failed to delete project:', e);
+      setDeleteError(e?.message || 'Could not delete this project.');
+    }
+    setDeletingId(null);
   }
 
   async function openProject(p: SavedProject) {
@@ -577,16 +597,25 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
           {!historyLoading && historyProjects.length === 0 && (
             <p className="text-xs text-white/40">No saved projects yet — build something and it will show up here.</p>
           )}
+          {deleteError && <p className="text-xs text-red-400">{deleteError}</p>}
           <div className="space-y-2">
             {historyProjects.map((p) => (
-              <button
+              <div
                 key={p.id}
-                onClick={() => openProject(p)}
-                className="w-full text-left rounded-lg border border-white/10 bg-white/[0.03] hover:bg-white/[0.06] px-3 py-2 transition-colors"
+                className="w-full flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] hover:bg-white/[0.06] px-3 py-2 transition-colors"
               >
-                <p className="text-sm text-white/90 truncate">{p.prompt}</p>
-                <p className="text-xs text-white/40">{new Date(p.created_at).toLocaleString()}</p>
-              </button>
+                <button onClick={() => openProject(p)} className="flex-1 text-left min-w-0">
+                  <p className="text-sm text-white/90 truncate">{p.prompt}</p>
+                  <p className="text-xs text-white/40">{new Date(p.created_at).toLocaleString()}</p>
+                </button>
+                <button
+                  onClick={() => deleteProject(p.id)}
+                  disabled={deletingId === p.id}
+                  className="text-xs text-red-400/70 hover:text-red-400 underline underline-offset-2 disabled:opacity-40 flex-shrink-0"
+                >
+                  {deletingId === p.id ? 'Deleting…' : 'Delete'}
+                </button>
+              </div>
             ))}
           </div>
         </div>
@@ -865,4 +894,4 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
       )}
     </div>
   );
-              }
+}
