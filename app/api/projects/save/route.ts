@@ -29,5 +29,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
+  const { error: versionError } = await supabase.from('forgestudio_project_versions').insert({
+    project_id: data.id,
+    user_id: user.id,
+    version_number: 1,
+    code,
+    preview_url: previewUrl || null,
+    description: 'Initial generation',
+  });
+  if (versionError) {
+    console.error('Failed to record initial version (project still saved):', versionError);
+  }
+
   return NextResponse.json({ project: data });
 }
