@@ -41,5 +41,5 @@ export async function POST(req: Request) {
     console.error('Failed to record initial version (project still saved):', versionError);
   }
 
-  return NextResponse.json({ project: data });
+  return NextResponse.json({ project: data, version: 1 });
 }

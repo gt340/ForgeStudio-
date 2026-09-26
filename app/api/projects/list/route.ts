@@ -18,5 +18,24 @@ export async function GET() {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ projects: data || [] });
+  const projects = data || [];
+
+  if (projects.length > 0) {
+    const { data: versionCounts } = await supabase
+      .from('forgestudio_project_versions')
+      .select('project_id')
+      .eq('user_id', user.id)
+      .in('project_id', projects.map((p) => p.id));
+
+    const counts: Record<string, number> = {};
+    for (const v of versionCounts || []) {
+      counts[v.project_id] = (counts[v.project_id] || 0) + 1;
+    }
+
+    for (const p of projects as any[]) {
+      p.latest_version = counts[p.id] || 1;
+    }
+  }
+
+  return NextResponse.json({ projects });
 }
