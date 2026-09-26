@@ -102,6 +102,14 @@ async function buildSandboxFiles(componentCode: string) {
 
 type PollResult = { ready: true; url: string } | { ready: false; log: string };
 type Suggestion = { id: string; label: string; description: string; needsBackend: boolean };
+type GithubInfo = {
+  owner: string;
+  repo: string;
+  url: string;
+  defaultBranch: string;
+  lastCommitSha?: string;
+  syncedAt?: string;
+};
 type SavedProject = {
   id: string;
   created_at: string;
@@ -110,6 +118,12 @@ type SavedProject = {
   preview_url: string | null;
   sandbox_id: string | null;
   latest_version?: number;
+  github_owner?: string | null;
+  github_repo?: string | null;
+  github_repo_url?: string | null;
+  github_default_branch?: string | null;
+  github_last_commit_sha?: string | null;
+  github_synced_at?: string | null;
 };
 
 const POLL_INTERVAL_MS = 2000;
@@ -135,7 +149,8 @@ export default function LivePreview() {
   const [debugLog, setDebugLog] = useState('');
   const [repoName, setRepoName] = useState('');
   const [githubStatus, setGithubStatus] = useState<'idle' | 'pushing' | 'done' | 'error'>('idle');
-  const [githubUrl, setGithubUrl] = useState<string | null>(null);
+  const [githubInfo, setGithubInfo] = useState<GithubInfo | null>(null);
+  const [githubError, setGithubError] = useState('');
   const [repairAttempt, setRepairAttempt] = useState(0);
   const [lastRepairCount, setLastRepairCount] = useState(0);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -362,7 +377,19 @@ export default function LivePreview() {
     setDebugLog('');
     setSandboxId(null);
     setGithubStatus('idle');
-    setGithubUrl(null);
+    setGithubError('');
+    if (p.github_owner && p.github_repo && p.github_repo_url) {
+      setGithubInfo({
+        owner: p.github_owner,
+        repo: p.github_repo,
+        url: p.github_repo_url,
+        defaultBranch: p.github_default_branch || 'main',
+        lastCommitSha: p.github_last_commit_sha || undefined,
+        syncedAt: p.github_synced_at || undefined,
+      });
+    } else {
+      setGithubInfo(null);
+    }
     setRepairAttempt(0);
     setLastRepairCount(0);
     setSuggestions([]);
@@ -512,7 +539,8 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
     setDebugLog('');
     setSandboxId(null);
     setGithubStatus('idle');
-    setGithubUrl(null);
+    setGithubInfo(null);
+    setGithubError('');
     setRepairAttempt(0);
     setLastRepairCount(0);
     setSuggestions([]);
@@ -600,6 +628,43 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
     setLoading(false);
   }
 
+  async function syncToGithub() {
+    if (!currentProjectId) return;
+    if (!githubInfo && !repoName.trim()) return;
+    setGithubStatus('pushing');
+    setGithubError('');
+    try {
+      const res = await fetch('/api/deploy/github', {
+        method: 'POST',
+        body: JSON.stringify({
+          projectId: currentProjectId,
+          repoName: githubInfo ? undefined : repoName.trim(),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        setGithubStatus('error');
+        setGithubError(data?.error || `Sync failed (status ${res.status})`);
+        return;
+      }
+
+      setGithubInfo({
+        owner: data.owner,
+        repo: data.repo,
+        url: data.url,
+        defaultBranch: data.defaultBranch,
+        lastCommitSha: data.lastCommitSha,
+        syncedAt: new Date().toISOString(),
+      });
+      setGithubStatus('done');
+    } catch (e: any) {
+      console.error(e);
+      setGithubStatus('error');
+      setGithubError(e?.message || 'Push failed');
+    }
+  }
+
   const idle = status === 'idle' && !previewUrl;
   const busy = loading || status === 'generating' || status === 'booting' || status === 'editing' || status === 'repairing';
 
@@ -649,6 +714,7 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
                   <p className="text-xs text-white/40">
                     {new Date(p.created_at).toLocaleString()}
                     {p.latest_version ? ` · v${p.latest_version}` : ''}
+                    {p.github_repo ? ` · GitHub linked` : ''}
                   </p>
                 </button>
                 <button
@@ -864,46 +930,53 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
       </div>
 
       {status === 'ready' && previewUrl && (
-        <div className="flex flex-col items-center gap-2 mt-3">
-          <input
-            value={repoName}
-            onChange={(e) => setRepoName(e.target.value)}
-            placeholder="repo-name"
-            className="text-xs bg-black/30 border border-white/10 rounded px-3 py-1.5 text-white/80 placeholder:text-white/30 focus:outline-none focus:border-cyan-400/40"
-          />
-          <button
-            onClick={async () => {
-              if (!code || !repoName) return;
-              setGithubStatus('pushing');
-              try {
-                const res = await fetch('/api/deploy/github', {
-                  method: 'POST',
-                  body: JSON.stringify({ code, repoName }),
-                });
-                const data = await res.json();
-                if (data.url) {
-                  setGithubUrl(data.url);
-                  setGithubStatus('done');
-                } else {
-                  setGithubStatus('error');
-                }
-              } catch (e) {
-                console.error(e);
-                setGithubStatus('error');
-              }
-            }}
-            disabled={!repoName || githubStatus === 'pushing'}
-            className="text-xs text-white/50 hover:text-cyan-300 underline underline-offset-2 transition-colors disabled:opacity-40"
-          >
-            {githubStatus === 'pushing' ? 'Pushing to GitHub…' : 'Push to GitHub'}
-          </button>
-          {githubStatus === 'done' && githubUrl && (
-            <a href={githubUrl} target="_blank" rel="noreferrer" className="text-xs text-cyan-300 underline">
-              View repo →
-            </a>
+        <div className="flex flex-col items-center gap-2 mt-3 max-w-2xl mx-auto w-full">
+          {githubInfo ? (
+            <div className="w-full rounded-lg border border-white/10 bg-white/[0.03] p-3 text-xs text-white/70 space-y-1">
+              <p>
+                <span className="text-white/40">GitHub:</span>{' '}
+                <a href={githubInfo.url} target="_blank" rel="noreferrer" className="text-cyan-300 underline">
+                  {githubInfo.owner}/{githubInfo.repo}
+                </a>{' '}
+                <span className="text-white/40">({githubInfo.defaultBranch})</span>
+              </p>
+              {githubInfo.lastCommitSha && (
+                <p className="text-white/40">Last commit: {githubInfo.lastCommitSha.slice(0, 7)}</p>
+              )}
+              {githubInfo.syncedAt && (
+                <p className="text-white/40">Synced {new Date(githubInfo.syncedAt).toLocaleString()}</p>
+              )}
+              <button
+                onClick={syncToGithub}
+                disabled={githubStatus === 'pushing' || !currentProjectId}
+                className="mt-1 text-xs text-white/50 hover:text-cyan-300 underline underline-offset-2 transition-colors disabled:opacity-40"
+              >
+                {githubStatus === 'pushing' ? 'Syncing…' : 'Sync latest changes to GitHub'}
+              </button>
+            </div>
+          ) : (
+            <>
+              <input
+                value={repoName}
+                onChange={(e) => setRepoName(e.target.value)}
+                placeholder="repo-name"
+                className="text-xs bg-black/30 border border-white/10 rounded px-3 py-1.5 text-white/80 placeholder:text-white/30 focus:outline-none focus:border-cyan-400/40 w-full max-w-xs"
+              />
+              <button
+                onClick={syncToGithub}
+                disabled={!repoName.trim() || githubStatus === 'pushing' || !currentProjectId}
+                className="text-xs text-white/50 hover:text-cyan-300 underline underline-offset-2 transition-colors disabled:opacity-40"
+              >
+                {githubStatus === 'pushing'
+                  ? 'Pushing to GitHub…'
+                  : !currentProjectId
+                  ? 'Saving project…'
+                  : 'Push to GitHub'}
+              </button>
+            </>
           )}
-          {githubStatus === 'error' && (
-            <p className="text-xs text-red-400">Push failed — is GitHub connected?</p>
+          {githubStatus === 'error' && githubError && (
+            <p className="text-xs text-red-400 text-center">{githubError}</p>
           )}
         </div>
       )}
