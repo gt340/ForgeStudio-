@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient, getCurrentUser } from '@/lib/supabase-server';
+import { cookies } from 'next/headers';
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const code = searchParams.get('code');
+  const state = searchParams.get('state');
   const origin = new URL(req.url).origin;
 
   const user = await getCurrentUser();
@@ -11,8 +13,19 @@ export async function GET(req: Request) {
     return NextResponse.redirect(`${origin}/login?error=not_authenticated`);
   }
 
+  const cookieStore = await cookies();
+  const expectedState = cookieStore.get('github_oauth_state')?.value;
+
+  if (!state || !expectedState || state !== expectedState) {
+    const res = NextResponse.redirect(`${origin}?error=github_invalid_state`);
+    res.cookies.set('github_oauth_state', '', { maxAge: 0, path: '/' });
+    return res;
+  }
+
   if (!code) {
-    return NextResponse.redirect(`${origin}?error=missing_code`);
+    const res = NextResponse.redirect(`${origin}?error=missing_code`);
+    res.cookies.set('github_oauth_state', '', { maxAge: 0, path: '/' });
+    return res;
   }
 
   const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
@@ -28,7 +41,22 @@ export async function GET(req: Request) {
   const tokenData = await tokenRes.json();
 
   if (!tokenData.access_token) {
-    return NextResponse.redirect(`${origin}?error=github_auth_failed`);
+    const res = NextResponse.redirect(`${origin}?error=github_auth_failed`);
+    res.cookies.set('github_oauth_state', '', { maxAge: 0, path: '/' });
+    return res;
+  }
+
+  let githubLogin: string | null = null;
+  try {
+    const ghUserRes = await fetch('https://api.github.com/user', {
+      headers: { Authorization: `Bearer ${tokenData.access_token}`, Accept: 'application/vnd.github+json' },
+    });
+    if (ghUserRes.ok) {
+      const ghUser = await ghUserRes.json();
+      githubLogin = ghUser?.login || null;
+    }
+  } catch (e) {
+    console.error('Failed to fetch GitHub username after connect:', e);
   }
 
   const supabase = await createSupabaseServerClient();
@@ -37,10 +65,13 @@ export async function GET(req: Request) {
       provider: 'GitHub',
       status: 'connected',
       access_token: tokenData.access_token,
+      github_login: githubLogin,
       user_id: user.id,
     },
     { onConflict: 'user_id,provider' }
   );
 
-  return NextResponse.redirect(`${origin}?connected=github`);
+  const res = NextResponse.redirect(`${origin}?connected=github`);
+  res.cookies.set('github_oauth_state', '', { maxAge: 0, path: '/' });
+  return res;
 }

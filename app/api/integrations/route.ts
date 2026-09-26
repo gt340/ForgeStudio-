@@ -8,7 +8,7 @@ export async function GET() {
   const supabase = await createSupabaseServerClient();
   const { data, error } = await supabase
     .from('integrations')
-    .select('id, provider, status, created_at')
+    .select('id, provider, status, created_at, github_login')
     .eq('user_id', user.id)
     .order('created_at', { ascending: false });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -24,7 +24,7 @@ export async function POST(req: Request) {
   const { data, error } = await supabase
     .from('integrations')
     .insert({ provider, user_id: user.id })
-    .select('id, provider, status, created_at')
+    .select('id, provider, status, created_at, github_login')
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ integration: data });
