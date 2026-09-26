@@ -109,6 +109,7 @@ type SavedProject = {
   code: string;
   preview_url: string | null;
   sandbox_id: string | null;
+  latest_version?: number;
 };
 
 const POLL_INTERVAL_MS = 2000;
@@ -148,6 +149,7 @@ export default function LivePreview() {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveError, setSaveError] = useState('');
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
+  const [currentVersion, setCurrentVersion] = useState<number>(0);
   const [mcpTestLoading, setMcpTestLoading] = useState(false);
   const [mcpTestResult, setMcpTestResult] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -218,6 +220,10 @@ export default function LivePreview() {
       setStatus('repairing');
       setRepairAttempt(attempt + 1);
       try {
+        // Repair mode operates on this in-memory, not-yet-saved candidate only —
+        // intentionally NOT sending projectId here, since the database still holds
+        // the last confirmed-working version and must not be touched until this
+        // candidate actually builds successfully.
         const repairData = await fetchJSON('/api/generate', {
           method: 'POST',
           body: JSON.stringify({
@@ -271,6 +277,7 @@ export default function LivePreview() {
       }, 20000);
       setSaveStatus('saved');
       if (data?.project?.id) setCurrentProjectId(data.project.id);
+      setCurrentVersion(typeof data?.version === 'number' ? data.version : 1);
     } catch (e: any) {
       console.error('Failed to save project history:', e);
       setSaveStatus('error');
@@ -280,13 +287,32 @@ export default function LivePreview() {
 
   async function updateProjectSnapshot(c: string, url: string) {
     if (!currentProjectId) return;
+    setSaveStatus('saving');
+    setSaveError('');
     try {
-      await fetchJSON('/api/projects/update', {
+      const res = await fetch('/api/projects/update', {
         method: 'POST',
-        body: JSON.stringify({ id: currentProjectId, code: c, previewUrl: url }),
-      }, 20000);
-    } catch (e) {
+        body: JSON.stringify({ id: currentProjectId, code: c, previewUrl: url, expectedVersion: currentVersion }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (res.status === 409) {
+        setSaveStatus('error');
+        setSaveError(data?.error || 'This project changed elsewhere. Reopen it to get the latest version.');
+        return;
+      }
+      if (!res.ok) {
+        setSaveStatus('error');
+        setSaveError(data?.error || `Save failed (status ${res.status})`);
+        return;
+      }
+
+      setSaveStatus('saved');
+      if (typeof data?.version === 'number') setCurrentVersion(data.version);
+    } catch (e: any) {
       console.error('Failed to update saved project snapshot:', e);
+      setSaveStatus('error');
+      setSaveError(e?.message || 'Unknown error saving changes');
     }
   }
 
@@ -346,6 +372,7 @@ export default function LivePreview() {
     setSaveStatus('idle');
     setSaveError('');
     setCurrentProjectId(p.id);
+    setCurrentVersion(p.latest_version || 1);
 
     try {
       const files = await buildSandboxFiles(p.code);
@@ -382,9 +409,13 @@ export default function LivePreview() {
 
     try {
       const genData = await fetchJSON('/api/generate', {
-  method: 'POST',
-  body: JSON.stringify({ prompt: instruction, existingCode: code }),
-}, 60000);
+        method: 'POST',
+        body: JSON.stringify({
+          prompt: instruction,
+          existingCode: code,
+          projectId: currentProjectId || undefined,
+        }),
+      }, 60000);
       const newCode = stripFences(genData.code);
       setCode(newCode);
 
@@ -442,7 +473,11 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
 
       const genData = await fetchJSON('/api/generate', {
         method: 'POST',
-        body: JSON.stringify({ prompt: instruction, existingCode: code }),
+        body: JSON.stringify({
+          prompt: instruction,
+          existingCode: code,
+          projectId: currentProjectId || undefined,
+        }),
       });
       const newCode = stripFences(genData.code);
       setCode(newCode);
@@ -487,6 +522,7 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
     setSaveStatus('idle');
     setSaveError('');
     setCurrentProjectId(null);
+    setCurrentVersion(0);
 
     try {
       const genData = await fetchJSON('/api/generate', {
@@ -537,7 +573,11 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
     try {
       const genData = await fetchJSON('/api/generate', {
         method: 'POST',
-        body: JSON.stringify({ prompt: instruction, existingCode: code }),
+        body: JSON.stringify({
+          prompt: instruction,
+          existingCode: code,
+          projectId: currentProjectId || undefined,
+        }),
       });
       const newCode = stripFences(genData.code);
       setCode(newCode);
@@ -606,7 +646,10 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
               >
                 <button onClick={() => openProject(p)} className="flex-1 text-left min-w-0">
                   <p className="text-sm text-white/90 truncate">{p.prompt}</p>
-                  <p className="text-xs text-white/40">{new Date(p.created_at).toLocaleString()}</p>
+                  <p className="text-xs text-white/40">
+                    {new Date(p.created_at).toLocaleString()}
+                    {p.latest_version ? ` · v${p.latest_version}` : ''}
+                  </p>
                 </button>
                 <button
                   onClick={() => deleteProject(p.id)}
@@ -721,12 +764,12 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
       )}
       {status === 'ready' && saveStatus === 'saved' && (
         <div className="text-center -mt-3">
-          <span className="text-xs text-cyan-300/80">✓ Saved to history</span>
+          <span className="text-xs text-cyan-300/80">✓ Saved to history{currentVersion ? ` (v${currentVersion})` : ''}</span>
         </div>
       )}
       {status === 'ready' && saveStatus === 'error' && (
         <div className="text-center -mt-3">
-          <span className="text-xs text-red-400">⚠ Could not save to history: {saveError}</span>
+          <span className="text-xs text-red-400">⚠ {saveError || 'Could not save to history'}</span>
         </div>
       )}
 
