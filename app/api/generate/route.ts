@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { NextResponse } from 'next/server';
-import { getCurrentUser } from '@/lib/supabase-server';
+import { createSupabaseServerClient, getCurrentUser } from '@/lib/supabase-server';
 
 export const maxDuration = 60;
 
@@ -93,7 +93,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
   }
 
-  const { prompt, existingCode, errorLog } = body || {};
+  const { prompt, existingCode: clientCode, errorLog, projectId } = body || {};
 
   if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
     return NextResponse.json({ error: 'A non-empty prompt is required' }, { status: 400 });
@@ -101,11 +101,43 @@ export async function POST(req: Request) {
   if (prompt.length > MAX_PROMPT_LENGTH) {
     return NextResponse.json({ error: `Prompt is too long (max ${MAX_PROMPT_LENGTH} characters)` }, { status: 400 });
   }
-  if (existingCode !== undefined && (typeof existingCode !== 'string' || existingCode.length > MAX_CODE_LENGTH)) {
+  if (clientCode !== undefined && (typeof clientCode !== 'string' || clientCode.length > MAX_CODE_LENGTH)) {
     return NextResponse.json({ error: 'Existing code is missing or too large' }, { status: 400 });
   }
   if (errorLog !== undefined && (typeof errorLog !== 'string' || errorLog.length > MAX_ERROR_LOG_LENGTH)) {
     return NextResponse.json({ error: 'Error log is too large' }, { status: 400 });
+  }
+  if (projectId !== undefined && typeof projectId !== 'string') {
+    return NextResponse.json({ error: 'Invalid projectId' }, { status: 400 });
+  }
+
+  // Determine which "existing code" context to actually use.
+  // - Repair mode (errorLog present): the code being fixed is an in-memory, not-yet-saved
+  //   candidate produced moments ago by this same request cycle — the database still holds the
+  //   OLD saved version, so we must trust the client-supplied code here, not overwrite it with DB state.
+  // - Real edit mode (projectId present, no errorLog): the database is authoritative. We never
+  //   trust client-supplied code as the base for an edit to a real, already-saved project — we load
+  //   it ourselves and verify ownership first.
+  let existingCode: string | undefined = clientCode;
+
+  if (projectId && !errorLog) {
+    const supabase = await createSupabaseServerClient();
+    const { data: project, error: fetchError } = await supabase
+      .from('forgestudio_projects')
+      .select('code')
+      .eq('id', projectId)
+      .eq('user_id', user.id)
+      .single();
+
+    if (fetchError || !project) {
+      return NextResponse.json({ error: 'Project not found' }, { status: 404 });
+    }
+
+    if (typeof project.code === 'string' && project.code.length > MAX_CODE_LENGTH) {
+      return NextResponse.json({ error: 'This project has grown too large for AI editing. Please export it instead.' }, { status: 400 });
+    }
+
+    existingCode = project.code;
   }
 
   const userMessage = buildUserMessage(prompt.trim(), existingCode, errorLog);
