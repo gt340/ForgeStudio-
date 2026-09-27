@@ -27,6 +27,9 @@ export default function IntegrationsCanvas() {
   const [showResendForm, setShowResendForm] = useState(false);
   const [cloudflareKey, setCloudflareKey] = useState('');
   const [showCloudflareForm, setShowCloudflareForm] = useState(false);
+  const [vercelToken, setVercelToken] = useState('');
+  const [showVercelForm, setShowVercelForm] = useState(false);
+  const [vercelError, setVercelError] = useState('');
   const [loading, setLoading] = useState(false);
 
   async function loadIntegrations() {
@@ -78,6 +81,30 @@ export default function IntegrationsCanvas() {
     setLoading(false);
   }
 
+  async function submitVercelToken() {
+    setLoading(true);
+    setVercelError('');
+    try {
+      const res = await fetch('/api/integrations/vercel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: vercelToken }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setVercelError(data?.error || 'Could not connect Vercel');
+        setLoading(false);
+        return;
+      }
+      setShowVercelForm(false);
+      setVercelToken('');
+      await loadIntegrations();
+    } catch (e: any) {
+      setVercelError(e?.message || 'Could not connect Vercel');
+    }
+    setLoading(false);
+  }
+
   async function connect(provider: string) {
     if (provider === 'Paystack') {
       setShowPaystackForm(true);
@@ -91,12 +118,12 @@ export default function IntegrationsCanvas() {
       setShowCloudflareForm(true);
       return;
     }
-    if (provider === 'Slack') {
-      window.location.href = '/api/auth/slack/start';
+    if (provider === 'Vercel') {
+      setShowVercelForm(true);
       return;
     }
-    if (provider === 'Vercel') {
-      window.location.href = '/api/auth/vercel';
+    if (provider === 'Slack') {
+      window.location.href = '/api/auth/slack/start';
       return;
     }
     if (provider === 'Supabase') {
@@ -198,6 +225,34 @@ export default function IntegrationsCanvas() {
             </button>
           </div>
         )}
+        {showVercelForm && (
+          <div className="col-span-full mt-2 p-4 border border-cyan-400/20 rounded-xl bg-black/30 space-y-2">
+            <label className="text-sm block text-white/70">Vercel Personal Access Token</label>
+            <p className="text-xs text-white/40">
+              Create one at{' '}
+              <a href="https://vercel.com/account/tokens" target="_blank" rel="noreferrer" className="text-cyan-300 underline">
+                vercel.com/account/tokens
+              </a>
+              . ForgeStudio verifies it immediately and never shows it again after saving.
+            </p>
+            <input
+              type="password"
+              value={vercelToken}
+              onChange={(e) => setVercelToken(e.target.value)}
+              placeholder="Paste your token"
+              className="w-full p-2.5 rounded-lg bg-black/40 border border-white/10 focus:border-cyan-400/50 focus:outline-none text-sm font-mono placeholder:text-white/25 transition-colors"
+            />
+            {vercelError && <p className="text-xs text-red-400">{vercelError}</p>}
+            <button
+              onClick={submitVercelToken}
+              disabled={loading || !vercelToken.trim()}
+              className="px-4 py-2 rounded-lg text-sm font-semibold text-black disabled:opacity-50"
+              style={{ background: 'linear-gradient(90deg, #00e5ff, #22d3ee)', boxShadow: '0 0 14px rgba(0,229,255,0.3)' }}
+            >
+              {loading ? 'Verifying…' : 'Connect Vercel'}
+            </button>
+          </div>
+        )}
         {AVAILABLE.map((item) => {
           const existing = isConnected(item.name);
           return (
@@ -227,5 +282,5 @@ export default function IntegrationsCanvas() {
         })}
       </div>
     </div>
-  );
-      }
+      );
+}
