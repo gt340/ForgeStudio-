@@ -8,7 +8,7 @@ export async function GET() {
   const supabase = await createSupabaseServerClient();
   const { data, error } = await supabase
     .from('forgestudio_projects')
-    .select('id, created_at, prompt, code, preview_url, sandbox_id, github_owner, github_repo, github_repo_url, github_default_branch, github_last_commit_sha, github_synced_at')
+    .select('id, created_at, prompt, code, preview_url, sandbox_id, github_owner, github_repo, github_repo_url, github_default_branch, github_last_commit_sha, github_synced_at, vercel_project_id, vercel_project_name, vercel_deployment_id, vercel_deployment_url, vercel_production_url, vercel_last_status, vercel_deployed_at')
     .eq('user_id', user.id)
     .order('created_at', { ascending: false })
     .limit(50);
