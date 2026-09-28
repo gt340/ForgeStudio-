@@ -110,6 +110,15 @@ type GithubInfo = {
   lastCommitSha?: string;
   syncedAt?: string;
 };
+type VercelInfo = {
+  projectId: string;
+  projectName: string;
+  deploymentId: string;
+  url: string | null;
+  productionUrl?: string | null;
+  status: string;
+  deployedAt?: string;
+};
 type SavedProject = {
   id: string;
   created_at: string;
@@ -124,6 +133,13 @@ type SavedProject = {
   github_default_branch?: string | null;
   github_last_commit_sha?: string | null;
   github_synced_at?: string | null;
+  vercel_project_id?: string | null;
+  vercel_project_name?: string | null;
+  vercel_deployment_id?: string | null;
+  vercel_deployment_url?: string | null;
+  vercel_production_url?: string | null;
+  vercel_last_status?: string | null;
+  vercel_deployed_at?: string | null;
 };
 
 const POLL_INTERVAL_MS = 2000;
@@ -151,6 +167,9 @@ export default function LivePreview() {
   const [githubStatus, setGithubStatus] = useState<'idle' | 'pushing' | 'done' | 'error'>('idle');
   const [githubInfo, setGithubInfo] = useState<GithubInfo | null>(null);
   const [githubError, setGithubError] = useState('');
+  const [vercelStatus, setVercelStatus] = useState<'idle' | 'deploying' | 'done' | 'error'>('idle');
+  const [vercelInfo, setVercelInfo] = useState<VercelInfo | null>(null);
+  const [vercelError, setVercelError] = useState('');
   const [repairAttempt, setRepairAttempt] = useState(0);
   const [lastRepairCount, setLastRepairCount] = useState(0);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -390,6 +409,21 @@ export default function LivePreview() {
     } else {
       setGithubInfo(null);
     }
+    setVercelStatus('idle');
+    setVercelError('');
+    if (p.vercel_project_id && p.vercel_project_name && p.vercel_deployment_id) {
+      setVercelInfo({
+        projectId: p.vercel_project_id,
+        projectName: p.vercel_project_name,
+        deploymentId: p.vercel_deployment_id,
+        url: p.vercel_deployment_url || null,
+        productionUrl: p.vercel_production_url || null,
+        status: p.vercel_last_status || 'UNKNOWN',
+        deployedAt: p.vercel_deployed_at || undefined,
+      });
+    } else {
+      setVercelInfo(null);
+    }
     setRepairAttempt(0);
     setLastRepairCount(0);
     setSuggestions([]);
@@ -541,6 +575,9 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
     setGithubStatus('idle');
     setGithubInfo(null);
     setGithubError('');
+    setVercelStatus('idle');
+    setVercelInfo(null);
+    setVercelError('');
     setRepairAttempt(0);
     setLastRepairCount(0);
     setSuggestions([]);
@@ -665,6 +702,43 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
     }
   }
 
+  async function deployToVercel() {
+    if (!currentProjectId || !githubInfo) return;
+    setVercelStatus('deploying');
+    setVercelError('');
+    try {
+      const res = await fetch('/api/deploy/vercel', {
+        method: 'POST',
+        body: JSON.stringify({ projectId: currentProjectId }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        setVercelStatus('error');
+        setVercelError(data?.error || `Deployment failed (status ${res.status})`);
+        return;
+      }
+
+      setVercelInfo({
+        projectId: data.projectId,
+        projectName: data.projectName,
+        deploymentId: data.deploymentId,
+        url: data.url,
+        productionUrl: data.status === 'READY' ? data.url : vercelInfo?.productionUrl || null,
+        status: data.status,
+        deployedAt: new Date().toISOString(),
+      });
+      setVercelStatus(data.status === 'ERROR' ? 'error' : 'done');
+      if (data.status === 'ERROR') {
+        setVercelError('Vercel reported the build failed — open the deployment on Vercel for build logs.');
+      }
+    } catch (e: any) {
+      console.error(e);
+      setVercelStatus('error');
+      setVercelError(e?.message || 'Deployment failed');
+    }
+  }
+
   const idle = status === 'idle' && !previewUrl;
   const busy = loading || status === 'generating' || status === 'booting' || status === 'editing' || status === 'repairing';
 
@@ -715,6 +789,7 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
                     {new Date(p.created_at).toLocaleString()}
                     {p.latest_version ? ` · v${p.latest_version}` : ''}
                     {p.github_repo ? ` · GitHub linked` : ''}
+                    {p.vercel_project_id ? ` · Vercel linked` : ''}
                   </p>
                 </button>
                 <button
@@ -977,6 +1052,49 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
           )}
           {githubStatus === 'error' && githubError && (
             <p className="text-xs text-red-400 text-center">{githubError}</p>
+          )}
+        </div>
+      )}
+
+      {status === 'ready' && previewUrl && githubInfo && (
+        <div className="flex flex-col items-center gap-2 max-w-2xl mx-auto w-full">
+          {vercelInfo ? (
+            <div className="w-full rounded-lg border border-white/10 bg-white/[0.03] p-3 text-xs text-white/70 space-y-1">
+              <p>
+                <span className="text-white/40">Vercel:</span> {vercelInfo.projectName}{' '}
+                <span className="text-white/40">
+                  ({vercelInfo.status}{vercelStatus === 'deploying' ? '…' : ''})
+                </span>
+              </p>
+              {vercelInfo.productionUrl && (
+                <p>
+                  <a href={vercelInfo.productionUrl} target="_blank" rel="noreferrer" className="text-cyan-300 underline">
+                    {vercelInfo.productionUrl.replace('https://', '')}
+                  </a>
+                </p>
+              )}
+              {vercelInfo.deployedAt && (
+                <p className="text-white/40">Last deployed {new Date(vercelInfo.deployedAt).toLocaleString()}</p>
+              )}
+              <button
+                onClick={deployToVercel}
+                disabled={vercelStatus === 'deploying'}
+                className="mt-1 text-xs text-white/50 hover:text-cyan-300 underline underline-offset-2 transition-colors disabled:opacity-40"
+              >
+                {vercelStatus === 'deploying' ? 'Redeploying…' : 'Redeploy to Vercel'}
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={deployToVercel}
+              disabled={vercelStatus === 'deploying'}
+              className="text-xs text-white/50 hover:text-cyan-300 underline underline-offset-2 transition-colors disabled:opacity-40"
+            >
+              {vercelStatus === 'deploying' ? 'Deploying to Vercel…' : 'Deploy to Vercel'}
+            </button>
+          )}
+          {vercelStatus === 'error' && vercelError && (
+            <p className="text-xs text-red-400 text-center">{vercelError}</p>
           )}
         </div>
       )}
