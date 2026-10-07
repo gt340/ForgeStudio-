@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect } from 'react';
+import PublishPanel, { type GithubInfo, type VercelInfo } from '@/components/PublishPanel';
 
 function stripFences(text: string) {
   return text
@@ -102,23 +103,6 @@ async function buildSandboxFiles(componentCode: string) {
 
 type PollResult = { ready: true; url: string } | { ready: false; log: string };
 type Suggestion = { id: string; label: string; description: string; needsBackend: boolean };
-type GithubInfo = {
-  owner: string;
-  repo: string;
-  url: string;
-  defaultBranch: string;
-  lastCommitSha?: string;
-  syncedAt?: string;
-};
-type VercelInfo = {
-  projectId: string;
-  projectName: string;
-  deploymentId: string;
-  url: string | null;
-  productionUrl?: string | null;
-  status: string;
-  deployedAt?: string;
-};
 type SavedProject = {
   id: string;
   created_at: string;
@@ -163,13 +147,10 @@ export default function LivePreview() {
   >('idle');
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [debugLog, setDebugLog] = useState('');
-  const [repoName, setRepoName] = useState('');
-  const [githubStatus, setGithubStatus] = useState<'idle' | 'pushing' | 'done' | 'error'>('idle');
-  const [githubInfo, setGithubInfo] = useState<GithubInfo | null>(null);
-  const [githubError, setGithubError] = useState('');
-  const [vercelStatus, setVercelStatus] = useState<'idle' | 'deploying' | 'done' | 'error'>('idle');
-  const [vercelInfo, setVercelInfo] = useState<VercelInfo | null>(null);
-  const [vercelError, setVercelError] = useState('');
+  const [publishInitial, setPublishInitial] = useState<{ github: GithubInfo | null; vercel: VercelInfo | null }>({
+    github: null,
+    vercel: null,
+  });
   const [repairAttempt, setRepairAttempt] = useState(0);
   const [lastRepairCount, setLastRepairCount] = useState(0);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -184,8 +165,6 @@ export default function LivePreview() {
   const [saveError, setSaveError] = useState('');
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const [currentVersion, setCurrentVersion] = useState<number>(0);
-  const [mcpTestLoading, setMcpTestLoading] = useState(false);
-  const [mcpTestResult, setMcpTestResult] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState('');
 
@@ -197,19 +176,6 @@ export default function LivePreview() {
       return () => clearInterval(id);
     }
   }, [status]);
-
-  async function testMcp() {
-    setMcpTestLoading(true);
-    setMcpTestResult(null);
-    try {
-      const res = await fetch('/api/mcp-test', { method: 'POST' });
-      const data = await res.json();
-      setMcpTestResult(JSON.stringify(data, null, 2));
-    } catch (e: any) {
-      setMcpTestResult(`Request failed: ${e?.message || e}`);
-    }
-    setMcpTestLoading(false);
-  }
 
   async function pollStatus(sbId: string): Promise<PollResult> {
     let lastLog = '';
@@ -395,35 +361,31 @@ export default function LivePreview() {
     setPreviewUrl(null);
     setDebugLog('');
     setSandboxId(null);
-    setGithubStatus('idle');
-    setGithubError('');
-    if (p.github_owner && p.github_repo && p.github_repo_url) {
-      setGithubInfo({
-        owner: p.github_owner,
-        repo: p.github_repo,
-        url: p.github_repo_url,
-        defaultBranch: p.github_default_branch || 'main',
-        lastCommitSha: p.github_last_commit_sha || undefined,
-        syncedAt: p.github_synced_at || undefined,
-      });
-    } else {
-      setGithubInfo(null);
-    }
-    setVercelStatus('idle');
-    setVercelError('');
-    if (p.vercel_project_id && p.vercel_project_name && p.vercel_deployment_id) {
-      setVercelInfo({
-        projectId: p.vercel_project_id,
-        projectName: p.vercel_project_name,
-        deploymentId: p.vercel_deployment_id,
-        url: p.vercel_deployment_url || null,
-        productionUrl: p.vercel_production_url || null,
-        status: p.vercel_last_status || 'UNKNOWN',
-        deployedAt: p.vercel_deployed_at || undefined,
-      });
-    } else {
-      setVercelInfo(null);
-    }
+    setPublishInitial({
+      github:
+        p.github_owner && p.github_repo && p.github_repo_url
+          ? {
+              owner: p.github_owner,
+              repo: p.github_repo,
+              url: p.github_repo_url,
+              defaultBranch: p.github_default_branch || 'main',
+              lastCommitSha: p.github_last_commit_sha || undefined,
+              syncedAt: p.github_synced_at || undefined,
+            }
+          : null,
+      vercel:
+        p.vercel_project_id && p.vercel_project_name && p.vercel_deployment_id
+          ? {
+              projectId: p.vercel_project_id,
+              projectName: p.vercel_project_name,
+              deploymentId: p.vercel_deployment_id,
+              url: p.vercel_deployment_url || null,
+              productionUrl: p.vercel_production_url || null,
+              status: p.vercel_last_status || 'UNKNOWN',
+              deployedAt: p.vercel_deployed_at || undefined,
+            }
+          : null,
+    });
     setRepairAttempt(0);
     setLastRepairCount(0);
     setSuggestions([]);
@@ -572,12 +534,7 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
     setPreviewUrl(null);
     setDebugLog('');
     setSandboxId(null);
-    setGithubStatus('idle');
-    setGithubInfo(null);
-    setGithubError('');
-    setVercelStatus('idle');
-    setVercelInfo(null);
-    setVercelError('');
+    setPublishInitial({ github: null, vercel: null });
     setRepairAttempt(0);
     setLastRepairCount(0);
     setSuggestions([]);
@@ -665,101 +622,11 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
     setLoading(false);
   }
 
-  async function syncToGithub() {
-    if (!currentProjectId) return;
-    if (!githubInfo && !repoName.trim()) return;
-    setGithubStatus('pushing');
-    setGithubError('');
-    try {
-      const res = await fetch('/api/deploy/github', {
-        method: 'POST',
-        body: JSON.stringify({
-          projectId: currentProjectId,
-          repoName: githubInfo ? undefined : repoName.trim(),
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
-        setGithubStatus('error');
-        setGithubError(data?.error || `Sync failed (status ${res.status})`);
-        return;
-      }
-
-      setGithubInfo({
-        owner: data.owner,
-        repo: data.repo,
-        url: data.url,
-        defaultBranch: data.defaultBranch,
-        lastCommitSha: data.lastCommitSha,
-        syncedAt: new Date().toISOString(),
-      });
-      setGithubStatus('done');
-    } catch (e: any) {
-      console.error(e);
-      setGithubStatus('error');
-      setGithubError(e?.message || 'Push failed');
-    }
-  }
-
-  async function deployToVercel() {
-    if (!currentProjectId || !githubInfo) return;
-    setVercelStatus('deploying');
-    setVercelError('');
-    try {
-      const res = await fetch('/api/deploy/vercel', {
-        method: 'POST',
-        body: JSON.stringify({ projectId: currentProjectId }),
-      });
-      const data = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
-        setVercelStatus('error');
-        setVercelError(data?.error || `Deployment failed (status ${res.status})`);
-        return;
-      }
-
-      setVercelInfo({
-        projectId: data.projectId,
-        projectName: data.projectName,
-        deploymentId: data.deploymentId,
-        url: data.url,
-        productionUrl: data.status === 'READY' ? data.url : vercelInfo?.productionUrl || null,
-        status: data.status,
-        deployedAt: new Date().toISOString(),
-      });
-      setVercelStatus(data.status === 'ERROR' ? 'error' : 'done');
-      if (data.status === 'ERROR') {
-        setVercelError('Vercel reported the build failed — open the deployment on Vercel for build logs.');
-      }
-    } catch (e: any) {
-      console.error(e);
-      setVercelStatus('error');
-      setVercelError(e?.message || 'Deployment failed');
-    }
-  }
-
   const idle = status === 'idle' && !previewUrl;
   const busy = loading || status === 'generating' || status === 'booting' || status === 'editing' || status === 'repairing';
 
   return (
     <div className="space-y-6">
-      <div className="max-w-2xl mx-auto w-full rounded-2xl border border-yellow-400/30 bg-yellow-400/5 p-4 space-y-2">
-        <p className="text-xs text-yellow-300/80 font-semibold">Temporary — MCP Phase 1 test</p>
-        <button
-          onClick={testMcp}
-          disabled={mcpTestLoading}
-          className="rounded-lg bg-yellow-400/20 hover:bg-yellow-400/30 text-yellow-200 px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50"
-        >
-          {mcpTestLoading ? 'Testing…' : 'Test MCP Connection'}
-        </button>
-        {mcpTestResult && (
-          <pre className="text-[10px] text-white/70 bg-black/40 rounded-lg p-3 overflow-auto max-h-64 whitespace-pre-wrap">
-            {mcpTestResult}
-          </pre>
-        )}
-      </div>
-
       <div className="flex justify-end max-w-2xl mx-auto w-full">
         <button
           onClick={toggleHistory}
@@ -957,7 +824,7 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
                           onClick={() => applyConnectedSuggestion(s)}
                           className="w-full rounded-lg px-3 py-1.5 text-xs font-semibold text-white border border-orange-400/40 hover:bg-orange-400/10 transition-all"
                         >
-                          Connect & add
+                          Connect &amp; add
                         </button>
                       )}
                     </div>
@@ -1005,98 +872,12 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
       </div>
 
       {status === 'ready' && previewUrl && (
-        <div className="flex flex-col items-center gap-2 mt-3 max-w-2xl mx-auto w-full">
-          {githubInfo ? (
-            <div className="w-full rounded-lg border border-white/10 bg-white/[0.03] p-3 text-xs text-white/70 space-y-1">
-              <p>
-                <span className="text-white/40">GitHub:</span>{' '}
-                <a href={githubInfo.url} target="_blank" rel="noreferrer" className="text-cyan-300 underline">
-                  {githubInfo.owner}/{githubInfo.repo}
-                </a>{' '}
-                <span className="text-white/40">({githubInfo.defaultBranch})</span>
-              </p>
-              {githubInfo.lastCommitSha && (
-                <p className="text-white/40">Last commit: {githubInfo.lastCommitSha.slice(0, 7)}</p>
-              )}
-              {githubInfo.syncedAt && (
-                <p className="text-white/40">Synced {new Date(githubInfo.syncedAt).toLocaleString()}</p>
-              )}
-              <button
-                onClick={syncToGithub}
-                disabled={githubStatus === 'pushing' || !currentProjectId}
-                className="mt-1 text-xs text-white/50 hover:text-cyan-300 underline underline-offset-2 transition-colors disabled:opacity-40"
-              >
-                {githubStatus === 'pushing' ? 'Syncing…' : 'Sync latest changes to GitHub'}
-              </button>
-            </div>
-          ) : (
-            <>
-              <input
-                value={repoName}
-                onChange={(e) => setRepoName(e.target.value)}
-                placeholder="repo-name"
-                className="text-xs bg-black/30 border border-white/10 rounded px-3 py-1.5 text-white/80 placeholder:text-white/30 focus:outline-none focus:border-cyan-400/40 w-full max-w-xs"
-              />
-              <button
-                onClick={syncToGithub}
-                disabled={!repoName.trim() || githubStatus === 'pushing' || !currentProjectId}
-                className="text-xs text-white/50 hover:text-cyan-300 underline underline-offset-2 transition-colors disabled:opacity-40"
-              >
-                {githubStatus === 'pushing'
-                  ? 'Pushing to GitHub…'
-                  : !currentProjectId
-                  ? 'Saving project…'
-                  : 'Push to GitHub'}
-              </button>
-            </>
-          )}
-          {githubStatus === 'error' && githubError && (
-            <p className="text-xs text-red-400 text-center">{githubError}</p>
-          )}
-        </div>
-      )}
-
-      {status === 'ready' && previewUrl && githubInfo && (
-        <div className="flex flex-col items-center gap-2 max-w-2xl mx-auto w-full">
-          {vercelInfo ? (
-            <div className="w-full rounded-lg border border-white/10 bg-white/[0.03] p-3 text-xs text-white/70 space-y-1">
-              <p>
-                <span className="text-white/40">Vercel:</span> {vercelInfo.projectName}{' '}
-                <span className="text-white/40">
-                  ({vercelInfo.status}{vercelStatus === 'deploying' ? '…' : ''})
-                </span>
-              </p>
-              {vercelInfo.productionUrl && (
-                <p>
-                  <a href={vercelInfo.productionUrl} target="_blank" rel="noreferrer" className="text-cyan-300 underline">
-                    {vercelInfo.productionUrl.replace('https://', '')}
-                  </a>
-                </p>
-              )}
-              {vercelInfo.deployedAt && (
-                <p className="text-white/40">Last deployed {new Date(vercelInfo.deployedAt).toLocaleString()}</p>
-              )}
-              <button
-                onClick={deployToVercel}
-                disabled={vercelStatus === 'deploying'}
-                className="mt-1 text-xs text-white/50 hover:text-cyan-300 underline underline-offset-2 transition-colors disabled:opacity-40"
-              >
-                {vercelStatus === 'deploying' ? 'Redeploying…' : 'Redeploy to Vercel'}
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={deployToVercel}
-              disabled={vercelStatus === 'deploying'}
-              className="text-xs text-white/50 hover:text-cyan-300 underline underline-offset-2 transition-colors disabled:opacity-40"
-            >
-              {vercelStatus === 'deploying' ? 'Deploying to Vercel…' : 'Deploy to Vercel'}
-            </button>
-          )}
-          {vercelStatus === 'error' && vercelError && (
-            <p className="text-xs text-red-400 text-center">{vercelError}</p>
-          )}
-        </div>
+        <PublishPanel
+          key={currentProjectId ?? 'unsaved'}
+          projectId={currentProjectId}
+          initialGithub={publishInitial.github}
+          initialVercel={publishInitial.vercel}
+        />
       )}
 
       {status === 'ready' && previewUrl && (
