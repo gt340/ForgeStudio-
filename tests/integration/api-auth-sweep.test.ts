@@ -33,13 +33,20 @@ describe('API routes require a signed-in user (anonymous sweep)', () => {
       const handlers = METHODS.filter((m) => typeof mod[m] === 'function');
       expect(handlers.length).toBeGreaterThan(0);
 
+      const failures: string[] = [];
       for (const method of handlers) {
         const init: any = method === 'GET' ? { method } : { method, body: '{}' };
         const req = new NextRequest('http://localhost/api/x?projectId=p1&id=p1', init);
-        const res: Response = await mod[method](req, { params: Promise.resolve({}) });
-        expect({ method, status: res.status }).toEqual({ method, status: expect.stringMatching(/.*/) });
-        expect([401, 403]).toContain(res.status);
+        let status: number | string;
+        try {
+          const res: Response = await mod[method](req, { params: Promise.resolve({}) });
+          status = res.status;
+        } catch (e) {
+          status = `threw: ${e instanceof Error ? e.message : String(e)}`;
+        }
+        if (status !== 401 && status !== 403) failures.push(`${method} -> ${status}`);
       }
+      expect(failures).toEqual([]);
     });
   }
 });
