@@ -13,7 +13,7 @@ export type GithubInfo = {
 export type VercelInfo = {
   projectId: string;
   projectName: string;
-  deploymentId: string;
+  deploymentId: string | null;
   url: string | null;
   productionUrl: string | null;
   status: string;
@@ -49,12 +49,22 @@ function uiFromState(state: string): DeployUi {
 }
 
 function initialUi(v: VercelInfo | null): DeployUi {
-  if (!v) return 'idle';
+  if (!v || !v.deploymentId) return 'idle';
   if (IN_PROGRESS.includes(v.status) || v.status === 'READY' || v.status === 'ERROR' || v.status === 'CANCELED') {
     return uiFromState(v.status);
   }
   return 'idle';
 }
+
+const UI_LABEL: Record<DeployUi, string> = {
+  idle: 'Not deployed yet',
+  preparing: 'Preparing',
+  deploying: 'Deploying',
+  ready: 'Ready',
+  failed: 'Failed',
+  canceled: 'Canceled',
+  timeout: 'Timed out',
+};
 
 export default function PublishPanel({ projectId, initialGithub, initialVercel }: Props) {
   const [repoName, setRepoName] = useState('');
@@ -62,12 +72,14 @@ export default function PublishPanel({ projectId, initialGithub, initialVercel }
   const [githubInfo, setGithubInfo] = useState<GithubInfo | null>(initialGithub);
   const [githubError, setGithubError] = useState('');
   const [githubNote, setGithubNote] = useState('');
+  const [githubWarning, setGithubWarning] = useState('');
 
   const [vercelInfo, setVercelInfo] = useState<VercelInfo | null>(initialVercel);
   const [deployUi, setDeployUi] = useState<DeployUi>(() => initialUi(initialVercel));
   const [deployError, setDeployError] = useState(() =>
     initialVercel?.status === 'ERROR' ? 'The last deployment failed on Vercel.' : ''
   );
+  const [deployWarning, setDeployWarning] = useState('');
   const [liveNote, setLiveNote] = useState('');
   const [elapsed, setElapsed] = useState(0);
 
@@ -103,7 +115,7 @@ export default function PublishPanel({ projectId, initialGithub, initialVercel }
     const ui = uiFromState(state);
     setDeployUi(ui);
     if (ui === 'failed') {
-      setDeployError(data?.errorMessage || 'Vercel reported the build failed — open the deployment on Vercel for build logs.');
+      setDeployError(data?.errorMessage || 'Vercel reported the build failed \u2014 open the deployment on Vercel for build logs.');
     }
     if (ui === 'ready' && data?.liveCheck) {
       setLiveNote(
@@ -135,7 +147,7 @@ export default function PublishPanel({ projectId, initialGithub, initialVercel }
           setDeployError(data?.error || 'Could not check the deployment status.');
           return;
         }
-        if (!res.ok) continue; // transient server error — keep polling
+        if (!res.ok) continue; // transient server error \u2014 keep polling
 
         const state: string = data?.status || 'QUEUED';
         applyStatus(data);
@@ -148,7 +160,7 @@ export default function PublishPanel({ projectId, initialGithub, initialVercel }
           if (aliasWaits >= MAX_ALIAS_WAIT_POLLS) return; // still showing READY with the deployment URL as fallback
         }
       } catch {
-        // transient network error — keep polling
+        // transient network error \u2014 keep polling
       }
     }
 
@@ -157,11 +169,33 @@ export default function PublishPanel({ projectId, initialGithub, initialVercel }
     }
   }
 
-  useEffect(() => {
-    // Resume watching a deployment that was still in progress when this project was opened.
-    if (projectId && initialVercel && IN_PROGRESS.includes(initialVercel.status)) {
-      void pollDeployment();
+  // Rebuilds the publish state from the database (the source of truth). Used when the panel mounts or
+  // remounts (reopened project, reload, parent re-render) so the workflow resumes at the right step.
+  async function loadPublishState(restoreDeploy: boolean) {
+    if (!projectId) return;
+    try {
+      const res = await fetch(`/api/projects/publish-state?projectId=${encodeURIComponent(projectId)}`);
+      if (!res.ok) return;
+      const data = await res.json().catch(() => null);
+      if (!alive.current || !data) return;
+
+      if (data.github) setGithubInfo(data.github as GithubInfo);
+
+      if (restoreDeploy && data.vercel) {
+        const v = data.vercel as VercelInfo;
+        setVercelInfo(v);
+        const ui = initialUi(v);
+        setDeployUi(ui);
+        if (ui === 'failed') setDeployError('The last deployment failed on Vercel.');
+        if (v.deploymentId && IN_PROGRESS.includes(v.status)) void pollDeployment();
+      }
+    } catch {
+      // keep whatever state we already have
     }
+  }
+
+  useEffect(() => {
+    void loadPublishState(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -171,6 +205,7 @@ export default function PublishPanel({ projectId, initialGithub, initialVercel }
     setGithubStatus('pushing');
     setGithubError('');
     setGithubNote('');
+    setGithubWarning('');
     try {
       const res = await fetch('/api/deploy/github', {
         method: 'POST',
@@ -195,8 +230,16 @@ export default function PublishPanel({ projectId, initialGithub, initialVercel }
         lastCommitSha: data.lastCommitSha,
         syncedAt: new Date().toISOString(),
       });
-      setGithubNote(data.changed === false ? 'Already up to date — no new commit was needed.' : 'New commit pushed.');
+      setGithubNote(
+        data.adopted
+          ? 'Reused your existing repository \u2014 no new repository was created.'
+          : data.changed === false
+          ? 'Already up to date \u2014 no new commit was needed.'
+          : 'New commit pushed.'
+      );
+      if (data.warning) setGithubWarning(data.warning);
       setGithubStatus('done');
+      void loadPublishState(false); // confirm what the database now holds
     } catch (e: any) {
       console.error(e);
       setGithubStatus('error');
@@ -209,6 +252,7 @@ export default function PublishPanel({ projectId, initialGithub, initialVercel }
     pollToken.current++; // stop any poll still running from an earlier deployment
     setDeployUi('preparing');
     setDeployError('');
+    setDeployWarning('');
     setLiveNote('');
     setElapsed(0);
     try {
@@ -233,6 +277,7 @@ export default function PublishPanel({ projectId, initialGithub, initialVercel }
         status: data.status,
         deployedAt: new Date().toISOString(),
       });
+      if (data.warning) setDeployWarning(data.warning);
       applyStatus(data);
 
       const state: string = data.status || 'QUEUED';
@@ -249,11 +294,12 @@ export default function PublishPanel({ projectId, initialGithub, initialVercel }
   const deploying = deployUi === 'preparing' || deployUi === 'deploying';
   const readyUrl = vercelInfo?.productionUrl || vercelInfo?.url || null;
   const needsRetry = deployUi === 'failed' || deployUi === 'canceled' || deployUi === 'timeout';
+  const hasDeployment = !!vercelInfo?.deploymentId;
   const deployButtonLabel = deploying
-    ? 'Deployment in progress…'
+    ? 'Deployment in progress\u2026'
     : needsRetry
-    ? 'Retry deploy'
-    : vercelInfo
+    ? 'Retry Vercel deployment'
+    : hasDeployment
     ? 'Redeploy to Vercel'
     : 'Deploy to Vercel';
   const notConnectedHint = (msg: string) => (/not connected/i.test(msg) ? ' Connect it from your integrations settings, then try again.' : '');
@@ -263,26 +309,35 @@ export default function PublishPanel({ projectId, initialGithub, initialVercel }
       <div className="flex flex-col items-center gap-2 mt-3 max-w-2xl mx-auto w-full">
         {githubInfo ? (
           <div className="w-full rounded-lg border border-white/10 bg-white/[0.03] p-3 text-xs text-white/70 space-y-1">
+            <p className="text-white/40 uppercase tracking-widest text-[10px]">GitHub</p>
+            <p className="text-cyan-300/90">\u2713 Synced successfully</p>
             <p>
-              <span className="text-white/40">GitHub:</span>{' '}
-              <a href={githubInfo.url} target="_blank" rel="noreferrer" className="text-cyan-300 underline">
-                {githubInfo.owner}/{githubInfo.repo}
-              </a>{' '}
-              <span className="text-white/40">({githubInfo.defaultBranch})</span>
+              <span className="text-white/40">Repository:</span> {githubInfo.owner}/{githubInfo.repo}
+            </p>
+            <p>
+              <span className="text-white/40">Branch:</span> {githubInfo.defaultBranch}
             </p>
             {githubInfo.lastCommitSha && (
-              <p className="text-white/40">Last commit: {githubInfo.lastCommitSha.slice(0, 7)}</p>
+              <p>
+                <span className="text-white/40">Commit:</span> {githubInfo.lastCommitSha.slice(0, 7)}
+              </p>
             )}
             {githubInfo.syncedAt && (
               <p className="text-white/40">Synced {new Date(githubInfo.syncedAt).toLocaleString()}</p>
             )}
             {githubStatus === 'done' && githubNote && <p className="text-cyan-300/80">{githubNote}</p>}
+            {githubWarning && <p className="text-orange-300">{githubWarning}</p>}
+            <p>
+              <a href={githubInfo.url} target="_blank" rel="noreferrer" className="text-white/50 hover:text-cyan-300 underline underline-offset-2">
+                View GitHub repository
+              </a>
+            </p>
             <button
               onClick={syncToGithub}
               disabled={githubStatus === 'pushing' || !projectId}
               className="mt-1 text-xs text-white/50 hover:text-cyan-300 underline underline-offset-2 transition-colors disabled:opacity-40"
             >
-              {githubStatus === 'pushing' ? 'Syncing…' : 'Sync latest changes to GitHub'}
+              {githubStatus === 'pushing' ? 'Syncing\u2026' : githubStatus === 'error' ? 'Retry GitHub sync' : 'Sync latest changes to GitHub'}
             </button>
           </div>
         ) : (
@@ -298,7 +353,13 @@ export default function PublishPanel({ projectId, initialGithub, initialVercel }
               disabled={!repoName.trim() || githubStatus === 'pushing' || !projectId}
               className="text-xs text-white/50 hover:text-cyan-300 underline underline-offset-2 transition-colors disabled:opacity-40"
             >
-              {githubStatus === 'pushing' ? 'Pushing to GitHub…' : !projectId ? 'Saving project…' : 'Push to GitHub'}
+              {githubStatus === 'pushing'
+                ? 'Pushing to GitHub\u2026'
+                : !projectId
+                ? 'Saving project\u2026'
+                : githubStatus === 'error'
+                ? 'Retry GitHub sync'
+                : 'Push to GitHub'}
             </button>
           </>
         )}
@@ -313,21 +374,25 @@ export default function PublishPanel({ projectId, initialGithub, initialVercel }
       {githubInfo && (
         <div className="flex flex-col items-center gap-2 max-w-2xl mx-auto w-full">
           <div className="w-full rounded-lg border border-white/10 bg-white/[0.03] p-3 text-xs text-white/70 space-y-1">
+            <p className="text-white/40 uppercase tracking-widest text-[10px]">Vercel</p>
+            <p className="text-white/50">
+              GitHub <span className="text-cyan-300/90">\u2713 Synced</span> \u2192 Vercel: {UI_LABEL[deployUi]}
+            </p>
             {vercelInfo && (
               <p>
-                <span className="text-white/40">Vercel:</span> {vercelInfo.projectName}
+                <span className="text-white/40">Project:</span> {vercelInfo.projectName}
               </p>
             )}
 
             {deployUi === 'preparing' && (
-              <p className="text-white/60 animate-pulse">Preparing deployment… ({elapsed}s)</p>
+              <p className="text-white/60 animate-pulse">Preparing deployment\u2026 ({elapsed}s)</p>
             )}
             {deployUi === 'deploying' && (
-              <p className="text-white/60 animate-pulse">Deployment in progress… ({elapsed}s)</p>
+              <p className="text-white/60 animate-pulse">Deployment in progress\u2026 ({elapsed}s)</p>
             )}
             {deployUi === 'ready' && (
               <>
-                <p className="text-cyan-300/90">✓ Deployment ready</p>
+                <p className="text-cyan-300/90">\u2713 Deployment ready</p>
                 {readyUrl && (
                   <p>
                     <a href={readyUrl} target="_blank" rel="noreferrer" className="text-cyan-300 underline">
@@ -341,19 +406,20 @@ export default function PublishPanel({ projectId, initialGithub, initialVercel }
             )}
             {deployUi === 'failed' && (
               <p className="text-red-400">
-                Deployment failed{deployError ? `: ${deployError}` : ''}
+                Vercel deployment failed{deployError ? `: ${deployError}` : ''}
                 {notConnectedHint(deployError)}
               </p>
             )}
             {deployUi === 'canceled' && <p className="text-orange-300">Deployment canceled.</p>}
             {deployUi === 'timeout' && (
               <p className="text-orange-300">
-                Timed out waiting for Vercel — the deployment may still finish.{' '}
+                Timed out waiting for Vercel \u2014 the deployment may still finish.{' '}
                 <button onClick={() => void pollDeployment()} className="underline underline-offset-2">
                   Check status again
                 </button>
               </p>
             )}
+            {deployWarning && <p className="text-orange-300">{deployWarning}</p>}
 
             {deployUi !== 'ready' && vercelInfo?.productionUrl && (
               <p className="text-white/40">
@@ -363,18 +429,19 @@ export default function PublishPanel({ projectId, initialGithub, initialVercel }
                 </a>
               </p>
             )}
-            {vercelInfo?.deployedAt && (
+            {vercelInfo?.deployedAt && hasDeployment && (
               <p className="text-white/40">Last deployed {new Date(vercelInfo.deployedAt).toLocaleString()}</p>
             )}
 
             <button
               onClick={deployToVercel}
               disabled={deploying}
-              className="mt-1 text-xs text-white/50 hover:text-cyan-300 underline underline-offset-2 transition-colors disabled:opacity-40"
+              className="mt-2 rounded-lg px-4 py-2 text-sm font-semibold text-black transition-all disabled:opacity-50"
+              style={{ background: 'linear-gradient(90deg, #00e5ff, #ff6b35)' }}
             >
               {deployButtonLabel}
             </button>
-            <p className="text-white/30">Deploys the latest commit synced to GitHub.</p>
+            <p className="text-white/30">Deploys the latest commit synced to GitHub. No new GitHub push needed.</p>
           </div>
         </div>
       )}

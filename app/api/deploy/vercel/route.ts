@@ -4,6 +4,9 @@ import { pickProductionUrl } from '@/lib/vercel-utils';
 
 export const maxDuration = 60;
 
+const IN_PROGRESS = ['QUEUED', 'INITIALIZING', 'BUILDING'];
+const REUSE_WINDOW_MS = 3 * 60 * 1000;
+
 function sanitizeProjectName(name: string): string {
   return name
     .toLowerCase()
@@ -40,7 +43,9 @@ export async function POST(req: Request) {
 
   const { data: project, error: projectError } = await supabase
     .from('forgestudio_projects')
-    .select('id, github_owner, github_repo, github_repo_id, github_default_branch, github_last_commit_sha, vercel_project_id, vercel_project_name')
+    .select(
+      'id, github_owner, github_repo, github_repo_id, github_default_branch, github_last_commit_sha, vercel_project_id, vercel_project_name, vercel_deployment_id, vercel_last_status, vercel_deployed_at'
+    )
     .eq('id', projectId)
     .eq('user_id', user.id)
     .single();
@@ -71,6 +76,31 @@ export async function POST(req: Request) {
   };
 
   try {
+    // Idempotency: a deployment for this project was started moments ago and is still running
+    // (double tap, remount, repeated request). Return it instead of starting another one.
+    const startedMsAgo = project.vercel_deployed_at ? Date.now() - new Date(project.vercel_deployed_at).getTime() : Infinity;
+    if (project.vercel_deployment_id && IN_PROGRESS.includes(project.vercel_last_status) && startedMsAgo < REUSE_WINDOW_MS) {
+      const curRes = await fetch(`https://api.vercel.com/v13/deployments/${project.vercel_deployment_id}`, { headers });
+      if (curRes.ok) {
+        const cur: any = await curRes.json().catch(() => null);
+        if (cur && IN_PROGRESS.includes(cur.readyState)) {
+          return NextResponse.json({
+            deploymentId: project.vercel_deployment_id,
+            url: cur.url ? `https://${cur.url}` : null,
+            productionUrl: null,
+            aliasPending: false,
+            status: cur.readyState,
+            projectId: project.vercel_project_id,
+            projectName: project.vercel_project_name,
+            polled: false,
+            reused: true,
+            commitSha: cur?.meta?.githubCommitSha ?? null,
+            errorMessage: null,
+          });
+        }
+      }
+    }
+
     let vercelProjectId: string | undefined = project.vercel_project_id || undefined;
     let vercelProjectName: string | undefined = project.vercel_project_name || undefined;
 
@@ -143,13 +173,21 @@ export async function POST(req: Request) {
       vercelProjectId = projData.id;
       vercelProjectName = projData.name;
 
-      // Persist the association IMMEDIATELY so a failure in the deployment step below can never
-      // cause the next attempt to create a second Vercel project for this ForgeStudio project.
-      await supabase
+      // Persist the association IMMEDIATELY and verify it saved. If it did not, stop: the Vercel project
+      // exists and will be ADOPTED on the next attempt (matched by name + repository), never duplicated.
+      const { error: linkError } = await supabase
         .from('forgestudio_projects')
         .update({ vercel_project_id: vercelProjectId, vercel_project_name: vercelProjectName })
         .eq('id', projectId)
         .eq('user_id', user.id);
+
+      if (linkError) {
+        console.error('Failed to save Vercel link to the project:', linkError.code, linkError.message);
+        return NextResponse.json(
+          { error: 'The Vercel project exists, but ForgeStudio could not save the link to this project. Try again — the existing Vercel project will be reused.' },
+          { status: 500 }
+        );
+      }
     }
 
     const deployRes = await fetch('https://api.vercel.com/v13/deployments', {
@@ -205,7 +243,7 @@ export async function POST(req: Request) {
       .eq('user_id', user.id);
 
     if (updateError) {
-      console.error('Failed to store Vercel deployment result (deployment itself was created):', updateError);
+      console.error('Failed to store Vercel deployment result (deployment itself was created):', updateError.code, updateError.message);
     }
 
     return NextResponse.json({
@@ -219,6 +257,8 @@ export async function POST(req: Request) {
       polled: !!settled,
       commitSha: finalState?.meta?.githubCommitSha ?? deployData?.meta?.githubCommitSha ?? null,
       errorMessage: status === 'ERROR' ? finalState?.errorMessage ?? null : null,
+      persisted: !updateError,
+      warning: updateError ? 'The deployment was created, but ForgeStudio could not save its details. Status updates may not survive a reload.' : null,
     });
   } catch (e) {
     console.error('Vercel deploy failed unexpectedly:', e instanceof Error ? e.message : 'unknown error');

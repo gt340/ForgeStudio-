@@ -6,6 +6,7 @@ export const maxDuration = 60;
 
 const REPO_NAME_PATTERN = /^[A-Za-z0-9._-]{1,100}$/;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function buildRepoFiles(code: string): Record<string, string> {
   return {
@@ -96,6 +97,7 @@ export async function POST(req: Request) {
     let repoId: number | undefined;
     let repoUrl: string | undefined;
     let isNewRepo = false;
+    let adopted = false;
 
     if (owner && repo) {
       // Existing association — verify the repo still actually exists before reusing it.
@@ -119,7 +121,7 @@ export async function POST(req: Request) {
       repoUrl = repoData.html_url;
       defaultBranch = repoData.default_branch || defaultBranch;
     } else {
-      // No association yet — create a new repository.
+      // No association yet — create a new repository (or adopt one ForgeStudio already made for this name).
       if (!repoName || typeof repoName !== 'string' || !repoName.trim()) {
         return NextResponse.json({ error: 'This project is not linked to a GitHub repository yet — provide a repository name.' }, { status: 400 });
       }
@@ -136,23 +138,58 @@ export async function POST(req: Request) {
       const repoData = await createRes.json().catch(() => ({}));
 
       if (createRes.status === 422) {
-        return NextResponse.json({ error: `A GitHub repository named "${cleanName}" already exists on your account — choose a different name.` }, { status: 409 });
-      }
-      if (!createRes.ok || !repoData.full_name) {
-        console.error('GitHub repo creation failed:', createRes.status, repoData?.message);
-        return NextResponse.json({ error: repoData?.message || 'Repository creation failed' }, { status: 502 });
+        // The name is taken. If that repository was made by ForgeStudio (its newest commit is a
+        // "ForgeStudio:" commit, or it is a brand-new repo with only GitHub's initial commit), this is
+        // a previous successful sync whose link was never saved — adopt it instead of failing.
+        const existRes = await fetch(`https://api.github.com/repos/${ghUser.login}/${encodeURIComponent(cleanName)}`, { headers });
+        if (existRes.ok) {
+          const existing = await existRes.json();
+          const headRes = await fetch(
+            `https://api.github.com/repos/${ghUser.login}/${encodeURIComponent(existing.name)}/commits/${encodeURIComponent(existing.default_branch || 'main')}`,
+            { headers }
+          );
+          const headMessage: string = headRes.ok ? (await headRes.json())?.commit?.message || '' : '';
+          const isFresh = Date.now() - new Date(existing.created_at).getTime() < DAY_MS;
+          const managedByForgeStudio = headMessage.startsWith('ForgeStudio:') || (headMessage === 'Initial commit' && isFresh);
+
+          if (managedByForgeStudio) {
+            // One ForgeStudio project <-> one repository: refuse if another project already owns it.
+            const { data: owners } = await supabase
+              .from('forgestudio_projects')
+              .select('id')
+              .eq('user_id', user.id)
+              .eq('github_repo_id', existing.id)
+              .neq('id', projectId);
+            if (owners && owners.length > 0) {
+              return NextResponse.json({ error: `The repository "${cleanName}" is already linked to another ForgeStudio project.` }, { status: 409 });
+            }
+            owner = existing.owner?.login || ghUser.login;
+            repo = existing.name;
+            repoId = existing.id;
+            repoUrl = existing.html_url;
+            defaultBranch = existing.default_branch || 'main';
+            adopted = true;
+          }
+        }
+        if (!adopted) {
+          return NextResponse.json({ error: `A GitHub repository named "${cleanName}" already exists on your account — choose a different name.` }, { status: 409 });
+        }
+      } else {
+        if (!createRes.ok || !repoData.full_name) {
+          console.error('GitHub repo creation failed:', createRes.status, repoData?.message);
+          return NextResponse.json({ error: repoData?.message || 'Repository creation failed' }, { status: 502 });
+        }
+        owner = ghUser.login;
+        repo = repoData.name;
+        repoId = repoData.id;
+        repoUrl = repoData.html_url;
+        defaultBranch = repoData.default_branch || 'main';
+        isNewRepo = true;
       }
 
-      owner = ghUser.login;
-      repo = repoData.name;
-      repoId = repoData.id;
-      repoUrl = repoData.html_url;
-      defaultBranch = repoData.default_branch || 'main';
-      isNewRepo = true;
-
-      // Persist the association IMMEDIATELY so that if a later step fails, a retry reuses this
-      // repository instead of trying (and failing) to create a second one.
-      await supabase
+      // Persist the association IMMEDIATELY and check that it really saved. If it did not, stop here:
+      // the repository exists, and the next attempt will adopt it rather than create a second one.
+      const { error: linkError } = await supabase
         .from('forgestudio_projects')
         .update({
           github_owner: owner,
@@ -163,13 +200,20 @@ export async function POST(req: Request) {
         })
         .eq('id', projectId)
         .eq('user_id', user.id);
+
+      if (linkError) {
+        console.error('Failed to save GitHub link to the project:', linkError.code, linkError.message);
+        return NextResponse.json(
+          { error: 'The GitHub repository exists, but ForgeStudio could not save the link to this project. Try again — the existing repository will be reused.' },
+          { status: 500 }
+        );
+      }
     }
 
     // Same page transform the sandbox preview applies, so the deployed site matches what the user saw.
     const files = buildRepoFiles(await prepareDeployableCode(project.code));
 
     // Push everything as ONE atomic commit (Git Data API) instead of one commit per file.
-    // Per-file commits left the branch in half-written states and fired a Vercel Git build per push.
     const base = `https://api.github.com/repos/${owner}/${repo}`;
     const branchPath = defaultBranch.split('/').map(encodeURIComponent).join('/');
 
@@ -214,6 +258,7 @@ export async function POST(req: Request) {
     let commitSha: string = headSha;
     let changed = false;
 
+    // Idempotent: if the repository already contains exactly this content, make NO new commit.
     if (treeData.sha !== baseTreeSha) {
       const commitRes = await fetch(`${base}/git/commits`, {
         method: 'POST',
@@ -263,7 +308,7 @@ export async function POST(req: Request) {
       .eq('user_id', user.id);
 
     if (updateError) {
-      console.error('Failed to store GitHub sync result (GitHub push itself succeeded):', updateError);
+      console.error('Failed to store GitHub sync result (GitHub push itself succeeded):', updateError.code, updateError.message);
     }
 
     return NextResponse.json({
@@ -274,6 +319,9 @@ export async function POST(req: Request) {
       lastCommitSha: commitSha,
       changed,
       isNewRepo,
+      adopted,
+      persisted: !updateError,
+      warning: updateError ? 'GitHub was updated, but ForgeStudio could not save the sync details. Deploy will still work, but they may not survive a reload.' : null,
     });
   } catch (e) {
     console.error('GitHub sync failed unexpectedly:', e instanceof Error ? e.message : 'unknown error');
