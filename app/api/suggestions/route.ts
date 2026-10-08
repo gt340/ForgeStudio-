@@ -1,11 +1,25 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { getCurrentUser } from '@/lib/supabase-server';
 
 export const maxDuration = 30;
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+const MAX_PROMPT_CHARS = 5000;
+
 export async function POST(req: Request) {
-  const { prompt } = await req.json();
+  // This route spends Anthropic credits — it must never be callable anonymously.
+  const user = await getCurrentUser();
+  if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const { prompt } = await req.json().catch(() => ({}));
+
+  if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
+    return Response.json({ error: 'Missing prompt' }, { status: 400 });
+  }
+  if (prompt.length > MAX_PROMPT_CHARS) {
+    return Response.json({ error: 'Prompt is too long' }, { status: 400 });
+  }
 
   const userMessage = `A user asked an AI website builder to create this: "${prompt}".
 
@@ -31,14 +45,19 @@ Return ONLY a raw JSON array, no markdown, no explanation, in this exact shape:
   }
 ]`;
 
-  const message = await anthropic.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 800,
-    messages: [{ role: 'user', content: userMessage }],
-  });
-
-  const block = message.content[0];
-  const text = block.type === 'text' ? block.text : '[]';
+  let text = '[]';
+  try {
+    const message = await anthropic.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 800,
+      messages: [{ role: 'user', content: userMessage }],
+    });
+    const block = message.content[0];
+    text = block.type === 'text' ? block.text : '[]';
+  } catch (e) {
+    console.error('Suggestions request failed:', e instanceof Error ? e.message : 'unknown error');
+    return Response.json({ error: 'Could not generate suggestions right now' }, { status: 502 });
+  }
 
   try {
     const cleaned = text
@@ -47,8 +66,8 @@ Return ONLY a raw JSON array, no markdown, no explanation, in this exact shape:
       .trim();
     const suggestions = JSON.parse(cleaned);
     return Response.json({ suggestions });
-  } catch (e) {
-    console.error('Failed to parse suggestions:', text);
+  } catch {
+    console.error('Failed to parse suggestions response');
     return Response.json({ suggestions: [] });
   }
-    }
+}

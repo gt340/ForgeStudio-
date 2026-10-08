@@ -1,10 +1,19 @@
 import JSZip from 'jszip';
+import { getCurrentUser } from '@/lib/supabase-server';
+
+const MAX_CODE_CHARS = 500_000;
 
 export async function POST(req: Request) {
-  const { code } = await req.json();
+  const user = await getCurrentUser();
+  if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
-  if (!code) {
+  const { code } = await req.json().catch(() => ({}));
+
+  if (!code || typeof code !== 'string') {
     return Response.json({ error: 'Missing code' }, { status: 400 });
+  }
+  if (code.length > MAX_CODE_CHARS) {
+    return Response.json({ error: 'Code is too large to export' }, { status: 400 });
   }
 
   const zip = new JSZip();
@@ -55,4 +64,4 @@ export async function POST(req: Request) {
       'Content-Disposition': 'attachment; filename="forgestudio-export.zip"',
     },
   });
-           }
+}
