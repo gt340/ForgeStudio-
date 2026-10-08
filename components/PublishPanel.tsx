@@ -295,6 +295,8 @@ export default function PublishPanel({ projectId, initialGithub, initialVercel }
   const readyUrl = vercelInfo?.productionUrl || vercelInfo?.url || null;
   const needsRetry = deployUi === 'failed' || deployUi === 'canceled' || deployUi === 'timeout';
   const hasDeployment = !!vercelInfo?.deploymentId;
+  // The push worked but the server could not save the sync details: do not present it as fully synced.
+  const githubUnsaved = !!githubWarning;
   const deployButtonLabel = deploying
     ? 'Deployment in progress…'
     : needsRetry
@@ -310,7 +312,11 @@ export default function PublishPanel({ projectId, initialGithub, initialVercel }
         {githubInfo ? (
           <div className="w-full rounded-lg border border-white/10 bg-white/[0.03] p-3 text-xs text-white/70 space-y-1">
             <p className="text-white/40 uppercase tracking-widest text-[10px]">GitHub</p>
-            <p className="text-cyan-300/90">✓ Synced successfully</p>
+            {githubUnsaved ? (
+              <p className="text-orange-300">⚠ Pushed to GitHub, but not fully saved</p>
+            ) : (
+              <p className="text-cyan-300/90">✓ Synced successfully</p>
+            )}
             <p>
               <span className="text-white/40">Repository:</span> {githubInfo.owner}/{githubInfo.repo}
             </p>
@@ -376,7 +382,13 @@ export default function PublishPanel({ projectId, initialGithub, initialVercel }
           <div className="w-full rounded-lg border border-white/10 bg-white/[0.03] p-3 text-xs text-white/70 space-y-1">
             <p className="text-white/40 uppercase tracking-widest text-[10px]">Vercel</p>
             <p className="text-white/50">
-              GitHub <span className="text-cyan-300/90">✓ Synced</span> → Vercel: {UI_LABEL[deployUi]}
+              GitHub{' '}
+              {githubUnsaved ? (
+                <span className="text-orange-300">⚠ Not fully saved</span>
+              ) : (
+                <span className="text-cyan-300/90">✓ Synced</span>
+              )}{' '}
+              → Vercel: {UI_LABEL[deployUi]}
             </p>
             {vercelInfo && (
               <p>
