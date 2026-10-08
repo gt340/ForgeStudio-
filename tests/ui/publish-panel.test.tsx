@@ -48,6 +48,7 @@ afterEach(() => {
 
 const panel = (g: GithubInfo | null, v: VercelInfo | null) => <PublishPanel projectId="p1" initialGithub={g} initialVercel={v} />;
 const text = (re: RegExp | string) => screen.queryByText(re);
+const count = (re: RegExp | string) => screen.queryAllByText(re).length;
 const button = (name: string) => screen.queryByRole('button', { name });
 
 describe('PublishPanel — GitHub step', () => {
@@ -98,7 +99,7 @@ describe('PublishPanel — GitHub step', () => {
     fireEvent.change(screen.getByPlaceholderText('repo-name'), { target: { value: 'blako' } });
     fireEvent.click(button('Push to GitHub')!);
 
-    await waitFor(() => expect(text(/not fully saved/i)).not.toBeNull());
+    await waitFor(() => expect(count(/not fully saved/i)).toBeGreaterThan(0));
     expect(text(/Synced successfully/)).toBeNull();
     expect(text(/could not save the sync details/)).not.toBeNull();
   });
@@ -149,7 +150,7 @@ describe('PublishPanel — Vercel states', () => {
   it('Deploying', () => {
     mockApi({ status: { status: 200, body: { status: 'BUILDING' } } });
     render(panel(GITHUB, vercel('BUILDING')));
-    expect(text(/Deployment in progress/)).not.toBeNull();
+    expect(count(/Deployment in progress/)).toBeGreaterThan(0);
     expect((button('Deployment in progress…') as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -180,7 +181,10 @@ describe('PublishPanel — Vercel states', () => {
 
   it('Timed out (after ~5 minutes of polling) is retryable', async () => {
     vi.useFakeTimers();
-    mockApi({ status: { status: 200, body: { status: 'BUILDING' } } });
+    mockApi({
+      state: { status: 200, body: { github: GITHUB, vercel: vercel('BUILDING') } },
+      status: { status: 200, body: { status: 'BUILDING' } },
+    });
     render(panel(GITHUB, vercel('BUILDING')));
 
     await act(async () => {

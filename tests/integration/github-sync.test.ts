@@ -193,8 +193,9 @@ describe('POST /api/deploy/github — failure handling', () => {
     const retry = await call({ projectId: 'p1' }); // no repoName needed any more
     expect(retry.res.status).toBe(200);
     expect(retry.data.changed).toBe(true);
-    expect(gh.repos.size).toBe(1);
-    expect(gh.messages('blako')).toEqual(['Initial commit', 'ForgeStudio: initial site']);
+    expect(gh.repos.size).toBe(1); // still one repository
+    // exactly one ForgeStudio commit was made (the retry labels it "update" because the repo already existed)
+    expect(gh.messages('blako')).toEqual(['Initial commit', 'ForgeStudio: update website']);
   });
 
   it('PHASE 6A BUG: if saving the project link fails, the API reports failure — never success — and pushes no site', async () => {
