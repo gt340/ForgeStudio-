@@ -41,13 +41,15 @@ export default function Page() {
 }
 `;
 
-const buildEnv = {
+// Explicit NodeJS.ProcessEnv type: Next's type augmentation narrows NODE_ENV to 'development' | 'production' | 'test',
+// so a widened `string` here would not type-check against execFileSync's `env` option.
+const buildEnv: NodeJS.ProcessEnv = {
   ...process.env,
   NODE_ENV: 'production', // vitest sets NODE_ENV=test, which Next's build rejects/warns about
   NEXT_TELEMETRY_DISABLED: '1',
   CI: '1',
 };
-delete (buildEnv as any).PEXELS_API_KEY;
+delete buildEnv.PEXELS_API_KEY;
 
 function run(cmd: string, args: string[], cwd: string, timeout: number): { ok: boolean; output: string } {
   try {
