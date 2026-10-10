@@ -1,5 +1,12 @@
 import JSZip from 'jszip';
 import { getCurrentUser } from '@/lib/supabase-server';
+import { buildDeployableRepoFiles, EXPORT_REPO_OPTIONS } from '@/lib/repo-files';
+
+// Route Handler: runs on the server only ('use client' does not apply here and must not be added).
+// Phase 7B: the ZIP now contains exactly the files the GitHub sync would push — the shared builder in
+// lib/repo-files.ts prepares the page (adds 'use client', resolves {{IMG}}/{{VIDEO}} placeholders) so the
+// exported project builds and shows real media instead of the raw saved source.
+export const maxDuration = 30;
 
 const MAX_CODE_CHARS = 500_000;
 
@@ -16,52 +23,21 @@ export async function POST(req: Request) {
     return Response.json({ error: 'Code is too large to export' }, { status: 400 });
   }
 
-  const zip = new JSZip();
+  try {
+    const files = await buildDeployableRepoFiles(code, EXPORT_REPO_OPTIONS);
 
-  zip.file(
-    'package.json',
-    JSON.stringify(
-      {
-        name: 'forgestudio-export',
-        private: true,
-        scripts: { dev: 'next dev', build: 'next build', start: 'next start' },
-        dependencies: {
-          next: '14.2.32',
-          react: '18.3.1',
-          'react-dom': '18.3.1',
-        },
+    const zip = new JSZip();
+    for (const [path, content] of Object.entries(files)) zip.file(path, content);
+    const buffer = await zip.generateAsync({ type: 'nodebuffer' });
+
+    return new Response(new Uint8Array(buffer), {
+      headers: {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': 'attachment; filename="forgestudio-export.zip"',
       },
-      null,
-      2
-    )
-  );
-
-  zip.file('next.config.js', 'module.exports = {};\n');
-
-  zip.file(
-    'app/layout.js',
-    'export default function RootLayout({ children }) {\n' +
-      '  return (\n' +
-      '    <html lang="en">\n' +
-      '      <body>{children}</body>\n' +
-      '    </html>\n' +
-      '  );\n' +
-      '}\n'
-  );
-
-  zip.file('app/page.js', code);
-
-  zip.file(
-    'README.md',
-    '# ForgeStudio Export\n\nRun locally:\n\n```\nnpm install\nnpm run dev\n```\n'
-  );
-
-  const buffer = await zip.generateAsync({ type: 'nodebuffer' });
-
-  return new Response(new Uint8Array(buffer), {
-    headers: {
-      'Content-Type': 'application/zip',
-      'Content-Disposition': 'attachment; filename="forgestudio-export.zip"',
-    },
-  });
+    });
+  } catch (e) {
+    console.error('Export failed:', e);
+    return Response.json({ error: 'Could not build the export. Please try again.' }, { status: 500 });
+  }
 }
