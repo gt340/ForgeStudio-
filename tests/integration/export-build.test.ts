@@ -51,6 +51,11 @@ const buildEnv: NodeJS.ProcessEnv = {
 };
 delete buildEnv.PEXELS_API_KEY;
 
+// GitHub Actions turns `::notice` lines into annotations, so the evidence is visible on the run summary page.
+function notice(message: string) {
+  console.log(`::notice title=export-build::${message.replace(/\r?\n/g, '%0A').slice(0, 900)}`);
+}
+
 function run(cmd: string, args: string[], cwd: string, timeout: number): { ok: boolean; output: string } {
   try {
     const out = execFileSync(cmd, args, { cwd, env: buildEnv, timeout, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 });
@@ -85,6 +90,7 @@ describe.skipIf(!enabled)('exported ZIP builds with a real Next.js production bu
         // 1) the exported project builds
         const build = run('node', [path.join('node_modules', 'next', 'dist', 'bin', 'next'), 'build'], dir, 420_000);
         console.log(`[export-build] exported project build:\n${build.output.split('\n').slice(0, 40).join('\n')}`);
+        notice(`EXPORTED ZIP BUILD ok=${build.ok} | ${build.output.split('\n').filter((l) => /Next\.js|Compiled|Generating|Route|Collecting|First Load|rror/.test(l)).slice(0, 8).join(' | ')}`);
         expect(build.ok, `next build of the exported ZIP failed:\n${build.output}`).toBe(true);
         expect(existsSync(path.join(dir, '.next', 'BUILD_ID'))).toBe(true);
 
@@ -94,6 +100,7 @@ describe.skipIf(!enabled)('exported ZIP builds with a real Next.js production bu
         writeFileSync(path.join(dir, 'app', 'page.js'), SAVED_PAGE);
         const control = run('node', [path.join('node_modules', 'next', 'dist', 'bin', 'next'), 'build'], dir, 420_000);
         console.log(`[export-build] CONTROL (raw source, no directive) build ok=${control.ok}:\n${control.output.split('\n').slice(0, 25).join('\n')}`);
+        notice(`CONTROL raw pre-7B source build ok=${control.ok} | ${control.output.split('\n').filter((l) => /rror|useState|Client Component|use client/.test(l)).slice(0, 6).join(' | ')}`);
         expect(control.ok, 'the raw (pre-7B) export unexpectedly built; the root-cause explanation is wrong').toBe(false);
         expect(control.output).toMatch(/useState|Client Component|use client/i);
       } finally {
