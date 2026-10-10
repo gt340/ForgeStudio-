@@ -9,7 +9,7 @@ function stripFences(text: string) {
     .trim();
 }
 
-async function fetchJSON(url: string, options: RequestInit, timeoutMs = 45000) {
+async function fetchJSON(url: string, options: RequestInit, timeoutMs = 45000, timeoutSubject = 'The AI') {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -23,7 +23,7 @@ async function fetchJSON(url: string, options: RequestInit, timeoutMs = 45000) {
   } catch (e: any) {
     clearTimeout(timer);
     if (e.name === 'AbortError') {
-      throw new Error(`The AI took too long to respond (over ${Math.round(timeoutMs / 1000)}s). Please try again.`);
+      throw new Error(`${timeoutSubject} took too long to respond (over ${Math.round(timeoutMs / 1000)}s). Please try again.`);
     }
     if (e instanceof TypeError) {
       throw new Error('Network issue — please check your connection and try again.');
@@ -167,6 +167,8 @@ export default function LivePreview() {
   const [currentVersion, setCurrentVersion] = useState<number>(0);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState('');
 
   useEffect(() => {
     const busyStates = ['generating', 'booting', 'editing', 'repairing'];
@@ -319,7 +321,7 @@ export default function LivePreview() {
   async function fetchHistory() {
     setHistoryLoading(true);
     try {
-      const data = await fetchJSON('/api/projects/list', { method: 'GET' }, 20000);
+      const data = await fetchJSON('/api/projects/list', { method: 'GET' }, 20000, 'The server');
       setHistoryProjects(data.projects || []);
     } catch (e) {
       console.error('Failed to load history:', e);
@@ -333,22 +335,91 @@ export default function LivePreview() {
     if (next) fetchHistory();
   }
 
+  // Resets everything that belonged to the currently open project, so a deleted project can't linger in the
+  // preview, be edited, exported or re-published (its saved record no longer exists).
+  function clearOpenProject() {
+    setCurrentProjectId(null);
+    setCurrentVersion(0);
+    setCode(null);
+    setPreviewUrl(null);
+    setSandboxId(null);
+    setStatus('idle');
+    setDebugLog('');
+    setPrompt('');
+    setEditPrompt('');
+    setLastPrompt('');
+    setRepairAttempt(0);
+    setLastRepairCount(0);
+    setSuggestions([]);
+    setExpandedSuggestion(null);
+    setSuggestionStatus({});
+    setSuggestionError({});
+    setSaveStatus('idle');
+    setSaveError('');
+    setPublishInitial({ github: null, vercel: null });
+  }
+
   async function deleteProject(id: string) {
-    if (!window.confirm('Delete this project? This cannot be undone.')) return;
+    if (
+      !window.confirm(
+        'Delete this project? This cannot be undone.\n\n' +
+          'Its linked GitHub repository and Vercel project/deployments (if any) are NOT deleted automatically — ' +
+          'remove them in GitHub and Vercel yourself if you no longer want them.'
+      )
+    )
+      return;
     setDeletingId(id);
     setDeleteError('');
     try {
       await fetchJSON('/api/projects/delete', {
         method: 'POST',
         body: JSON.stringify({ id }),
-      }, 20000);
+      }, 20000, 'The server');
       setHistoryProjects((prev) => prev.filter((p) => p.id !== id));
-      if (currentProjectId === id) setCurrentProjectId(null);
+      if (currentProjectId === id) clearOpenProject();
     } catch (e: any) {
       console.error('Failed to delete project:', e);
       setDeleteError(e?.message || 'Could not delete this project.');
     }
     setDeletingId(null);
+  }
+
+  // Only a successful (HTTP 2xx, application/zip) response is ever turned into a download. Any error —
+  // 401/400/500, or a JSON error body — is shown to the user and never saved as "forgestudio-export.zip".
+  async function exportZip() {
+    if (!code || exporting) return;
+    setExporting(true);
+    setExportError('');
+    try {
+      const res = await fetch('/api/export', {
+        method: 'POST',
+        body: JSON.stringify({ code }),
+      });
+      const type = res.headers?.get?.('content-type') || '';
+      if (!res.ok || !type.includes('application/zip')) {
+        let message = `Export failed (${res.status}).`;
+        try {
+          const data = await res.json();
+          if (data?.error) message = String(data.error);
+        } catch {
+          // body wasn't JSON — keep the generic message
+        }
+        setExportError(message);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'forgestudio-export.zip';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      console.error('Export failed:', e);
+      setExportError('Network issue — the export could not be downloaded. Please try again.');
+    } finally {
+      setExporting(false);
+    }
   }
 
   async function openProject(p: SavedProject) {
@@ -849,25 +920,14 @@ On form submit, call e.preventDefault(), then insert one row into the table '${s
         </div>
       )}
 
+      {exportError && <p className="text-center text-xs text-red-400 mt-3">{exportError}</p>}
       <div className="flex justify-center mt-3">
         <button
-          onClick={async () => {
-            if (!code) return;
-            const res = await fetch('/api/export', {
-              method: 'POST',
-              body: JSON.stringify({ code }),
-            });
-            const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'forgestudio-export.zip';
-            a.click();
-            URL.revokeObjectURL(url);
-          }}
-          className="text-xs text-white/50 hover:text-cyan-300 underline underline-offset-2 transition-colors"
+          onClick={exportZip}
+          disabled={exporting}
+          className="text-xs text-white/50 hover:text-cyan-300 underline underline-offset-2 transition-colors disabled:opacity-40"
         >
-          Export as ZIP
+          {exporting ? 'Exporting…' : 'Export as ZIP'}
         </button>
       </div>
 
