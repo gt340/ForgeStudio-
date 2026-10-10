@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, cleanup, waitFor, fireEvent, within } from '@testing-library/react';
 import LivePreview from '@/components/LivePreview';
 
 // Phase 7B-A/7B-C component tests: Delete workflow and Export button of the builder.
@@ -40,9 +40,13 @@ function mockApi(routes: Routes) {
 
 const listOk: Reply = { status: 200, body: { projects: PROJECTS } };
 
+// The prompt textarea shows the open project's prompt too, so look project rows up INSIDE the history panel only.
+const panel = () => within(screen.getByText('Your saved projects').parentElement as HTMLElement);
+
 async function openHistory() {
   fireEvent.click(screen.getByText('History'));
-  await screen.findByText('Alpha bakery site');
+  await screen.findByText('Your saved projects');
+  await waitFor(() => expect(panel().getByText('Alpha bakery site')).toBeTruthy());
 }
 
 beforeEach(() => {
@@ -71,7 +75,7 @@ describe('Delete workflow (UI)', () => {
     expect(text).toMatch(/NOT deleted/);
     // declined -> nothing is sent
     expect(api.count('/api/projects/delete')).toBe(0);
-    expect(screen.getByText('Alpha bakery site')).toBeTruthy();
+    expect(panel().getByText('Alpha bakery site')).toBeTruthy();
   });
 
   it('deletes only the chosen project: sends its id and removes just that row', async () => {
@@ -81,9 +85,9 @@ describe('Delete workflow (UI)', () => {
     await openHistory();
 
     fireEvent.click(screen.getAllByText('Delete')[1]); // Beta
-    await waitFor(() => expect(screen.queryByText('Beta florist site')).toBeNull());
+    await waitFor(() => expect(panel().queryByText('Beta florist site')).toBeNull());
 
-    expect(screen.getByText('Alpha bakery site')).toBeTruthy();
+    expect(panel().getByText('Alpha bakery site')).toBeTruthy();
     const del = api.calls.filter((c) => c.url.includes('/api/projects/delete'));
     expect(del).toHaveLength(1);
     expect(del[0].body).toEqual({ id: 'p2' });
@@ -97,7 +101,7 @@ describe('Delete workflow (UI)', () => {
 
     fireEvent.click(screen.getAllByText('Delete')[0]);
     await screen.findByText(/Request failed \(404\)/);
-    expect(screen.getByText('Alpha bakery site')).toBeTruthy();
+    expect(panel().getByText('Alpha bakery site')).toBeTruthy();
   });
 
   it('a delete timeout is described as a SERVER timeout, not as the AI being slow', async () => {
@@ -110,7 +114,7 @@ describe('Delete workflow (UI)', () => {
     const msg = await screen.findByText(/took too long to respond/);
     expect(msg.textContent).toMatch(/The server took too long/);
     expect(msg.textContent).not.toMatch(/AI/);
-    expect(screen.getByText('Alpha bakery site')).toBeTruthy();
+    expect(panel().getByText('Alpha bakery site')).toBeTruthy();
   });
 
   it('clears the stale preview/editor state when the OPEN project is deleted (and it can no longer be exported)', async () => {
@@ -125,14 +129,14 @@ describe('Delete workflow (UI)', () => {
     await openHistory();
 
     // open project p1 -> its prompt is loaded and the (error) preview area is shown
-    fireEvent.click(screen.getByText('Alpha bakery site'));
+    fireEvent.click(panel().getByText('Alpha bakery site'));
     await screen.findByText(/Something went wrong/);
     expect((screen.getByPlaceholderText(/Build a landing page/) as HTMLTextAreaElement).value).toBe('Alpha bakery site');
 
     // delete that same project from History
     await openHistory();
     fireEvent.click(screen.getAllByText('Delete')[0]);
-    await waitFor(() => expect(screen.queryByText('Alpha bakery site')).toBeNull());
+    await waitFor(() => expect(panel().queryByText('Alpha bakery site')).toBeNull());
 
     // preview/editor state is gone, back to the empty builder
     expect(screen.queryByText(/Something went wrong/)).toBeNull();
@@ -151,12 +155,12 @@ describe('Delete workflow (UI)', () => {
     render(<LivePreview />);
     await openHistory();
 
-    fireEvent.click(screen.getByText('Alpha bakery site'));
+    fireEvent.click(panel().getByText('Alpha bakery site'));
     await screen.findByText(/Something went wrong/);
 
     await openHistory();
     fireEvent.click(screen.getAllByText('Delete')[1]); // Beta, not the open one
-    await waitFor(() => expect(screen.queryByText('Beta florist site')).toBeNull());
+    await waitFor(() => expect(panel().queryByText('Beta florist site')).toBeNull());
 
     expect(screen.getByText(/Something went wrong/)).toBeTruthy();
     expect((screen.getByPlaceholderText(/Build a landing page/) as HTMLTextAreaElement).value).toBe('Alpha bakery site');
@@ -168,7 +172,7 @@ describe('Export button (UI)', () => {
     const api = mockApi({ list: listOk, sandbox: { status: 200, body: {} }, ...routes });
     render(<LivePreview />);
     await openHistory();
-    fireEvent.click(screen.getByText('Alpha bakery site'));
+    fireEvent.click(panel().getByText('Alpha bakery site'));
     await screen.findByText(/Something went wrong/);
     return api;
   }
