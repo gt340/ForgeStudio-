@@ -34,12 +34,14 @@ create function auth.uid() returns uuid language sql stable as $$
 $$;
 grant usage on schema auth to anon, authenticated, service_role, postgres;
 grant execute on function auth.uid() to anon, authenticated, service_role, postgres;
-grant select on auth.users to postgres;
-grant references on auth.users to postgres;
+-- postgres needs these to create the FK tables below and to insert disposable fixture users in the delete test
+grant select, insert, delete, references on auth.users to postgres;
 
 -- ---------- default privileges exactly as audited
 alter default privileges for role supabase_admin in schema public
   grant all on tables to postgres, anon, authenticated, service_role;
+alter default privileges for role postgres in schema public
+  grant all on tables to postgres;
 alter default privileges for role postgres in schema public
   grant truncate, references, trigger, maintain on tables to anon, authenticated, service_role;
 
