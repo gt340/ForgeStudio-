@@ -47,8 +47,23 @@ const q = (sql: string, user = 'postgres') => {
   return r.out.trim();
 };
 
+// GitHub keeps only ~10 annotations per step, so evidence is buffered and emitted as three combined annotations in afterAll.
+function emit(title: string, message: string) {
+  console.log(`::notice title=${title}::${message.replace(/%/g, '%25').replace(/\r?\n/g, '%0A').slice(0, 6000)}`);
+}
+const BUF: { title: string; msg: string }[] = [];
 function notice(title: string, message: string) {
-  console.log(`::notice title=${title}::${message.replace(/%/g, '%25').replace(/\r?\n/g, '%0A').slice(0, 3800)}`);
+  BUF.push({ title, msg: message });
+}
+function flushNotices() {
+  const groups: [string, (t: string) => boolean][] = [
+    ['gates-A-B-C-E-F-suite', (t) => /^gate-(A|B-before|CEF)/.test(t)],
+    ['gates-migration-delete-rollback', (t) => /^gate-(CE-migration|B-after|delete|F-rollback)/.test(t)],
+    ['gate-D-rls_auto_enable', (t) => t.startsWith('gate-D')],
+  ];
+  for (const [title, test] of groups) {
+    emit(title, BUF.filter((b) => test(b.title)).map((b) => `[${b.title}] ${b.msg}`).join('\n'));
+  }
 }
 
 // ACL text -> sorted entries, so the comparison does not depend on entry order
@@ -126,6 +141,7 @@ describe.skipIf(!enabled)('Phase 7B release gates on PostgreSQL 17 (disposable c
   }, 600_000);
 
   afterAll(() => {
+    flushNotices();
     sh('docker', ['rm', '-f', PG, REST]);
   });
 
