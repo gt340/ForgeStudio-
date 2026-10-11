@@ -205,7 +205,7 @@ describe.skipIf(!enabled)('Phase 7B release gates on PostgreSQL 17 (disposable c
   });
 
   it('GATE C+E: apply the REAL migration file; extended grant check returns zero rows; new-table defaults', () => {
-    const mig = psql('postgres', 'app', read('supabase/migrations/20261010120000_least_privilege_public_tables.sql'));
+    const mig = psql('postgres', 'app', read('supabase/pending/20261010120000_least_privilege_public_tables.sql'));
     expect(mig.code, mig.err).toBe(0);
 
     const sql = read('supabase/tests/rls_grants_check.sql');
