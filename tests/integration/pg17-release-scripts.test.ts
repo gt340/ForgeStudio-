@@ -117,9 +117,18 @@ describe.skipIf(!enabled)('Phase 7B production scripts on PostgreSQL 17.6 (dispo
   }, 600_000);
 
   afterAll(() => {
-    const all = EV.join('\n');
-    emit('pg17-scripts-A', all.slice(0, 5800));
-    if (all.length > 5800) emit('pg17-scripts-B', all.slice(5800, 11800));
+    // short annotations (<= ~1300 chars each, at most 4): very long messages were not displayed for the older gates test
+    const chunks: string[] = [];
+    let cur = '';
+    for (const line of EV) {
+      if (cur.length + line.length + 1 > 1300 && cur) {
+        chunks.push(cur);
+        cur = '';
+      }
+      cur += (cur ? '\n' : '') + line.slice(0, 600);
+    }
+    if (cur) chunks.push(cur);
+    chunks.slice(0, 4).forEach((c, i) => emit(`pg17-scripts-${i + 1}`, c));
     sh('docker', ['rm', '-f', PG]);
   });
 
