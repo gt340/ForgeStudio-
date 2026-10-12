@@ -1,7 +1,7 @@
 import { describe, it, expect, afterAll, beforeAll } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 // PHASE 7B PRODUCTION SCRIPTS, validated on a DISPOSABLE PostgreSQL 17.6 container (never production).
@@ -129,6 +129,12 @@ describe.skipIf(!enabled)('Phase 7B production scripts on PostgreSQL 17.6 (dispo
     }
     if (cur) chunks.push(cur);
     chunks.slice(0, 4).forEach((c, i) => emit(`pg17-scripts-${i + 1}`, c));
+    // full evidence also goes to the job summary (no size/count cap, unlike annotations)
+    try {
+      if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n### pg17-scripts evidence (PostgreSQL 17.6, scripts unadapted)\n\n\`\`\`\n${EV.join('\n')}\n\`\`\`\n`);
+    } catch {
+      /* summary is best effort */
+    }
     sh('docker', ['rm', '-f', PG]);
   });
 
