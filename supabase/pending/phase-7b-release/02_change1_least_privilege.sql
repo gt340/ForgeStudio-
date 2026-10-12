@@ -1,6 +1,6 @@
 -- PRODUCTION CHANGE 1: least-privilege grants on the 5 app tables. NOT EXECUTED. Needs the Commander's explicit authorization.
 -- Source of the statements: supabase/pending/20261010120000_least_privilege_public_tables.sql (identical statements).
--- Run as `postgres` through the Supabase MCP `apply_migration` (name: least_privilege_public_tables) or the SQL editor.
+-- Run as `postgres` with psql through the Supabase session pooler (psql -X -v ON_ERROR_STOP=1 -f <file>; no --single-transaction; password from a hidden prompt, never on the command line). Production execution must use psql; the MCP apply_migration / execute_sql routes are NOT verified.
 -- ATOMIC: preflight assertions -> snapshot -> change -> post-assertions, in ONE transaction. Any failed assertion raises
 -- an exception, the whole transaction is rolled back and NOTHING changes. Success = the call returns without error.
 -- Expected strings are PostgreSQL 17 ACL text (MAINTAIN = letter m).

@@ -1,6 +1,8 @@
 # ForgeStudio Phase 7B - production execution scripts (NOT EXECUTED; each step needs separate Commander authorization)
 
-All scripts run as `postgres` (non-superuser) through the Supabase MCP (`execute_sql` / `apply_migration`) or the SQL editor.
+Production execution MUST use `psql` through the Supabase session pooler (host `aws-0-eu-west-1.pooler.supabase.com`, port 5432, user `postgres.<project-ref>`, `sslmode=require`),
+running each file as the `postgres` role (non-superuser) with `psql -X -v ON_ERROR_STOP=1 -f <file>` (no `--single-transaction`; the scripts contain their own `begin; ... commit;`).
+The password is entered at a hidden prompt (`read -rsp` into `PGPASSWORD`) and is never placed on a command line, in a file, or in chat. No other execution route is verified.
 Every changing script is ONE transaction: preflight assertions -> (snapshot) -> change -> post-assertions. A failed
 assertion raises an exception and PostgreSQL rolls the whole transaction back: nothing changes. `set local lock_timeout = '5s'`
 makes it fail fast instead of waiting behind another session.
@@ -32,8 +34,7 @@ Re-run 01 immediately before step 1 and keep its output; compare the INFO row co
 - PostgreSQL 17.6 CI gate `tests/integration/pg17-release-scripts.test.ts`: runs these eight files EXACTLY as committed (real PG17 version guard 170000..179999,
   real MAINTAIN letter `m`) against a disposable `postgres:17.6` container: preflight, drift rejection, POSTCHECK rollback, Change 1/2 apply and verify,
   repeat-run refusal, both rollbacks, re-apply, lock_timeout. Results are emitted as `pg17-scripts-A/B` annotations on the CI run.
-- NOT VERIFIED (cannot be tested in CI): the real production execution path (Supabase MCP `execute_sql` / `apply_migration` / pg-meta wrapper, pooler, role switching).
-  CI delivers each file as one simple-query string via `psql -c`, which proves the SQL, not that transport. In particular it is unverified whether the production
-  mechanism honours the explicit `begin; ... commit;` inside the text (e.g. whether `apply_migration` wraps the text in its own transaction). The first production run
+- NOT VERIFIED (cannot be tested in CI): the real production execution path (psql through the session pooler, role switching). The Supabase MCP `execute_sql` / `apply_migration` routes are NOT a verified execution route and must not be used for production.
+  CI delivers each file as one simple-query string via `psql -c`, which proves the SQL, not that transport. In particular it is not proven how any wrapper (MCP `apply_migration`, the Management API, the SQL editor) treats the explicit `begin; ... commit;` inside the text, which is why `psql` file execution is required. The first production run
   must therefore start with the read-only preflight and be followed by the read-only verify scripts.
 - These files live in `supabase/pending/` and are never applied automatically.

@@ -1,6 +1,6 @@
 -- PRODUCTION CHANGE 2: revoke EXECUTE on public.rls_auto_enable() from public, anon, authenticated. NOT EXECUTED.
 -- Apply only AFTER Change 1 is applied and verified, and only with the Commander's separate authorization.
--- Run as `postgres` (Supabase MCP `apply_migration`, name: revoke_execute_rls_auto_enable, or the SQL editor).
+-- Run as `postgres` with psql through the Supabase session pooler (psql -X -v ON_ERROR_STOP=1 -f <file>; no --single-transaction; password from a hidden prompt, never on the command line). Production execution must use psql; the MCP apply_migration / execute_sql routes are NOT verified.
 -- ATOMIC: preflight assertions -> change -> post-assertions (+ probe) in ONE transaction; any failure rolls everything back.
 -- The ensure_rls event trigger does not check the creating role's EXECUTE privilege (proven on PostgreSQL 17.6 in CI),
 -- and the probe re-proves it on production inside the transaction.

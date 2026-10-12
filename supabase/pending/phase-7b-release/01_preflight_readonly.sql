@@ -1,4 +1,4 @@
--- PRODUCTION PREFLIGHT (READ-ONLY, one SELECT; changes nothing). Run with execute_sql immediately before Change 1.
+-- PRODUCTION PREFLIGHT (READ-ONLY, one SELECT; changes nothing). Run with psql through the Supabase session pooler (psql -X -v ON_ERROR_STOP=1 -f <file>; no --single-transaction; password from a hidden prompt, never on the command line) immediately before Change 1.
 -- Every row must say PASS (INFO rows are for the record). SAVE THE OUTPUT: it is the recovery record and the row-count baseline.
 -- Any FAIL = stop, do not run Change 1; report the row.
 with
