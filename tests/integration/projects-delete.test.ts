@@ -84,3 +84,68 @@ describe('POST /api/projects/delete (application level, mocked database)', () =>
     expect(data.success).toBeUndefined();
   });
 });
+
+// ---- Phase 7B-C: cross-user deletion regression (application level, mocked database) ----
+describe('cross-user deletion regression (application level)', () => {
+  function setupTwoOwners() {
+    const db = createFakeDb({
+      forgestudio_projects: [
+        { id: 'p1', user_id: 'u1' },
+        { id: 'p2', user_id: 'u2' },
+      ],
+      forgestudio_project_versions: [
+        { id: 'v1', project_id: 'p1', user_id: 'u1' },
+        { id: 'v2', project_id: 'p2', user_id: 'u2' },
+      ],
+    });
+    h.db = db;
+    return db;
+  }
+
+  it('user B cannot delete user A\'s project (404, nothing deleted, versions untouched)', async () => {
+    const db = setupTwoOwners();
+    h.user = { id: 'u2' };
+    const { res } = await del({ id: 'p1' });
+    expect(res.status).toBe(404);
+    expect(db.ops.some((o) => o.op === 'delete')).toBe(false);
+    expect(db.tables.forgestudio_projects.map((r) => r.id).sort()).toEqual(['p1', 'p2']);
+    expect(db.tables.forgestudio_project_versions).toHaveLength(2);
+  });
+
+  it('user A cannot delete user B\'s project either (symmetric)', async () => {
+    const db = setupTwoOwners();
+    h.user = { id: 'u1' };
+    const { res } = await del({ id: 'p2' });
+    expect(res.status).toBe(404);
+    expect(db.tables.forgestudio_projects.map((r) => r.id).sort()).toEqual(['p1', 'p2']);
+  });
+
+  it('the 404 for someone else\'s project is indistinguishable from a project that does not exist', async () => {
+    setupTwoOwners();
+    h.user = { id: 'u2' };
+    const other = await del({ id: 'p1' });
+    const missing = await del({ id: 'does-not-exist' });
+    expect(other.res.status).toBe(missing.res.status);
+    expect(other.data).toEqual(missing.data);
+  });
+
+  it('a crafted id (filter-injection style) matches nothing and deletes nothing', async () => {
+    const db = setupTwoOwners();
+    h.user = { id: 'u1' };
+    for (const id of ["p1' or user_id.neq.u1", 'p1,p2', '*', '%']) {
+      const { res } = await del({ id });
+      expect(res.status).toBe(404);
+    }
+    expect(db.ops.some((o) => o.op === 'delete')).toBe(false);
+    expect(db.tables.forgestudio_projects).toHaveLength(2);
+  });
+
+  it('every delete issued is scoped by BOTH id and the caller\'s user_id', async () => {
+    const db = setupTwoOwners();
+    h.user = { id: 'u2' };
+    await del({ id: 'p2' });
+    const deleteOp = db.ops.find((o) => o.op === 'delete')!;
+    expect(deleteOp.filters).toEqual(expect.arrayContaining([['id', 'eq', 'p2'], ['user_id', 'eq', 'u2']]));
+    expect(db.tables.forgestudio_projects.map((r) => r.id)).toEqual(['p1']);
+  });
+});

@@ -1,43 +1,12 @@
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient, getCurrentUser } from '@/lib/supabase-server';
-import { prepareDeployableCode } from '@/lib/deploy-code';
+import { buildDeployableRepoFiles, GITHUB_REPO_OPTIONS } from '@/lib/repo-files';
 
 export const maxDuration = 60;
 
 const REPO_NAME_PATTERN = /^[A-Za-z0-9._-]{1,100}$/;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-function buildRepoFiles(code: string): Record<string, string> {
-  return {
-    'package.json': JSON.stringify(
-      {
-        name: 'forgestudio-site',
-        private: true,
-        scripts: { dev: 'next dev', build: 'next build', start: 'next start' },
-        dependencies: {
-          next: '14.2.32',
-          react: '18.3.1',
-          'react-dom': '18.3.1',
-          '@supabase/supabase-js': '2.45.4',
-        },
-      },
-      null,
-      2
-    ),
-    'next.config.js': 'module.exports = {};\n',
-    'app/layout.js':
-      'export default function RootLayout({ children }) {\n' +
-      '  return (\n' +
-      '    <html lang="en">\n' +
-      '      <body>{children}</body>\n' +
-      '    </html>\n' +
-      '  );\n' +
-      '}\n',
-    'app/page.js': code,
-    'README.md': '# ForgeStudio Site\n\nGenerated and synced from ForgeStudio. Run `npm install` then `npm run dev` to preview locally.\n',
-  };
-}
 
 export async function POST(req: Request) {
   const user = await getCurrentUser();
@@ -211,7 +180,7 @@ export async function POST(req: Request) {
     }
 
     // Same page transform the sandbox preview applies, so the deployed site matches what the user saw.
-    const files = buildRepoFiles(await prepareDeployableCode(project.code));
+    const files = await buildDeployableRepoFiles(project.code, GITHUB_REPO_OPTIONS);
 
     // Push everything as ONE atomic commit (Git Data API) instead of one commit per file.
     const base = `https://api.github.com/repos/${owner}/${repo}`;
