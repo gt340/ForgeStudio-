@@ -2,6 +2,10 @@
 -- Apply only AFTER Change 1 is applied and verified, and only with the Commander's separate authorization.
 -- Run as `postgres` with psql through the Supabase session pooler (psql -X -v ON_ERROR_STOP=1 -f <file>; no --single-transaction; password from a hidden prompt, never on the command line). Production execution must use psql; the MCP apply_migration / execute_sql routes are NOT verified.
 -- ATOMIC: preflight assertions -> change -> post-assertions (+ probe) in ONE transaction; any failure rolls everything back.
+-- CHANGE-ORDER GATE: the preflight first requires the EXACT post-Change-1 state (the five table ACLs and the default table ACL of
+-- postgres in public, the same values 02 asserts in its POSTCHECK). The original baseline, a partially applied or a partly reverted
+-- Change 1, and an over-revoked state all fail it with 'PREFLIGHT: Change 1 is not in place' before anything is changed.
+-- The gate proves the ACL end state only. Running 03 and 04 and reading their output remains a mandatory manual step.
 -- The ensure_rls event trigger does not check the creating role's EXECUTE privilege (proven on PostgreSQL 17.6 in CI),
 -- and the probe re-proves it on production inside the transaction.
 
@@ -11,12 +15,35 @@ set local statement_timeout = '60s';
 
 do $c2_pre$
 declare
-  fo oid; facl aclitem[]; own text; secdef boolean; cfg text[]; ret text; evf oid; evs text; n bigint; snap jsonb; t text; got aclitem[]; acl_txt text[];
+  fo oid; facl aclitem[]; own text; secdef boolean; cfg text[]; ret text; evf oid; evs text; n bigint; snap jsonb; t text; got aclitem[]; acl_txt text[]; exp text[];
 begin
   if current_user <> 'postgres' then raise exception 'PREFLIGHT: must run as postgres, running as %', current_user; end if;
   if (select rolsuper from pg_roles where rolname = current_user) then raise exception 'PREFLIGHT: postgres must not be superuser'; end if;
   if current_setting('server_version_num')::int not between 170000 and 179999 then
     raise exception 'PREFLIGHT: expected PostgreSQL 17, got %', current_setting('server_version'); end if;
+  -- CHANGE-ORDER GATE (before any change): Change 1 must already be in place. Exact, order-independent ACL set comparison; the
+  -- expected values are copied from the POSTCHECK of 02_change1_least_privilege.sql (a unit test keeps the two in sync).
+  for t, exp in
+    select v.t, v.e from (values
+    ('env_vars', array['postgres=arwdDxtm/postgres','authenticated=arwd/postgres','service_role=Dxtm/postgres']::text[]),
+    ('forgestudio_project_versions', array['postgres=arwdDxtm/postgres','authenticated=ard/postgres','service_role=Dxtm/postgres']::text[]),
+    ('forgestudio_projects', array['postgres=arwdDxtm/postgres','authenticated=arwd/postgres','service_role=Dxtm/postgres']::text[]),
+    ('integrations', array['postgres=arwdDxtm/postgres','authenticated=arwd/postgres','service_role=Dxtm/postgres']::text[]),
+    ('seo_settings', array['postgres=arwdDxtm/postgres','authenticated=arwd/postgres','service_role=Dxtm/postgres']::text[])
+    ) v(t, e)
+  loop
+    select c.relacl into got from pg_class c where c.oid = ('public.' || t)::regclass;
+    if (select coalesce(array_agg(x::text order by x::text), '{}'::text[]) from unnest(got) x)
+       is distinct from (select array_agg(y order by y) from unnest(exp) y) then
+      raise exception 'PREFLIGHT: Change 1 is not in place: ACL of public.% is % (expected %); apply and verify Change 1 first', t, got::text, exp::text;
+    end if;
+  end loop;
+  select d.defaclacl into got from pg_default_acl d
+   where d.defaclrole = 'postgres'::regrole and d.defaclnamespace = 'public'::regnamespace and d.defaclobjtype = 'r';
+  if (select coalesce(array_agg(x::text order by x::text), '{}'::text[]) from unnest(got) x)
+     is distinct from (select array_agg(y order by y) from unnest(array['postgres=arwdDxtm/postgres','service_role=Dxtm/postgres']::text[]) y) then
+    raise exception 'PREFLIGHT: Change 1 is not in place: default ACL (postgres, public, tables) is % (expected %); apply and verify Change 1 first', got::text, array['postgres=arwdDxtm/postgres','service_role=Dxtm/postgres']::text[]::text;
+  end if;
   select p.oid, p.proacl, pg_get_userbyid(p.proowner), p.prosecdef, p.proconfig, p.prorettype::regtype::text
     into fo, facl, own, secdef, cfg, ret
     from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname = 'rls_auto_enable' and p.pronargs = 0;
@@ -42,6 +69,8 @@ begin
     'env_vars', (select count(*) from public.env_vars),
     'policies', (select count(*) from pg_policies where schemaname = 'public'),
     'policy_fp', (select md5(string_agg(format('%s|%s|%s|%s|%s|%s|%s', tablename, policyname, cmd, permissive, roles::text, coalesce(qual,''), coalesce(with_check,'')), E'\n' order by tablename, policyname)) from pg_policies where schemaname = 'public'),
+    'acl', (select string_agg(c.relname || '=' || coalesce((select string_agg(x::text, ',' order by x::text) from unnest(c.relacl) x), 'NULL'), ';' order by c.relname) from pg_class c where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p'))
+           || '|' || coalesce((select string_agg(x::text, ',' order by x::text) from pg_default_acl d cross join lateral unnest(d.defaclacl) x where d.defaclrole = 'postgres'::regrole and d.defaclnamespace = 'public'::regnamespace and d.defaclobjtype = 'r'), 'NULL'),
     'rls', (select string_agg(relname || ':' || relrowsecurity::text, ',' order by relname) from pg_class where relnamespace = 'public'::regnamespace and relkind in ('r', 'p'))
   )::text, true);
 end
@@ -95,8 +124,10 @@ begin
     'env_vars', (select count(*) from public.env_vars),
     'policies', (select count(*) from pg_policies where schemaname = 'public'),
     'policy_fp', (select md5(string_agg(format('%s|%s|%s|%s|%s|%s|%s', tablename, policyname, cmd, permissive, roles::text, coalesce(qual,''), coalesce(with_check,'')), E'\n' order by tablename, policyname)) from pg_policies where schemaname = 'public'),
+    'acl', (select string_agg(c.relname || '=' || coalesce((select string_agg(x::text, ',' order by x::text) from unnest(c.relacl) x), 'NULL'), ';' order by c.relname) from pg_class c where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p'))
+           || '|' || coalesce((select string_agg(x::text, ',' order by x::text) from pg_default_acl d cross join lateral unnest(d.defaclacl) x where d.defaclrole = 'postgres'::regrole and d.defaclnamespace = 'public'::regnamespace and d.defaclobjtype = 'r'), 'NULL'),
     'rls', (select string_agg(relname || ':' || relrowsecurity::text, ',' order by relname) from pg_class where relnamespace = 'public'::regnamespace and relkind in ('r', 'p'))
-  ) then raise exception 'POSTCHECK: row counts / RLS flags / policies changed. before=% ', snap::text; end if;
+  ) then raise exception 'POSTCHECK: row counts / RLS flags / policies / table ACLs changed. before=% ', snap::text; end if;
 end
 $c2_post$;
 
