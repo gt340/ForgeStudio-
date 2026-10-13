@@ -60,8 +60,7 @@ Recommended request to support (a question, not an action): "Can the default pri
 **Monitoring:** `supabase/monitoring/public_privilege_monitor.sql` (read-only, expected zero rows) flags, for every table
 in `public`: prohibited privileges (TRUNCATE/TRIGGER/REFERENCES/MAINTAIN) for anon/authenticated, any anon table access,
 RLS disabled, owner other than `postgres`, dangerous defaults for future `postgres`-created tables, and SECURITY DEFINER
-functions executable by anon/authenticated. Run it after every schema change and at least weekly (it can also be run from
-the Supabase MCP / SQL editor). Validated on a PostgreSQL replica: before the changes it flags the known findings; after
+functions executable by anon/authenticated. Run it after every schema change and at least weekly (read-only; run it with psql like the other scripts. The Supabase MCP / SQL editor transport is unverified). Validated on a PostgreSQL replica: before the changes it flags the known findings; after
 the changes it returns zero rows; a table created by `supabase_admin` produces 12 violation rows.
 Production baseline today (before any change): ANON_TABLE_ACCESS 14, FUTURE_TABLE_DEFAULT 8, PROHIBITED_PRIVILEGE 40,
 SECDEF_FUNCTION_EXECUTABLE 2 (= `rls_auto_enable()` for anon and authenticated). 0 RLS_DISABLED, 0 NON_POSTGRES_OWNER.
@@ -161,15 +160,22 @@ Re-take P2 immediately before executing; use that fresh output for the compariso
 
 ### 3.4 Execution procedure (when authorized)
 
-1. Run P1-P7; stop on any mismatch.
-2. Apply Change 1 through the Supabase MCP `apply_migration` (name `least_privilege_public_tables`), using the statements in
-   `supabase/pending/` (the SQL body without the comment header is equivalent), with `set local lock_timeout = '5s';` as the
-   first statement. History records the apply-time timestamp
-   as the version; then, in a follow-up commit, move the file from `supabase/pending/` to `supabase/migrations/` under
-   the recorded version (or align the history version to `20261010120000` as in Phase 7A with
-   `update supabase_migrations.schema_migrations set version = '20261010120000' where name = 'least_privilege_public_tables';`).
-3. Run the verification queries (3.5). On any failure run the rollback (3.6) immediately.
-4. Only then apply Change 2 and re-verify.
+**Execution route (approved): `psql` through the Supabase session pooler, run by the Commander.** Each file runs with
+`psql -X -v ON_ERROR_STOP=1 -f <file>` (no `--single-transaction`; the scripts contain their own `begin; ... commit;`), as the `postgres`
+role, with the password typed at a hidden prompt (never on a command line, in a file or in chat). Details: `supabase/pending/phase-7b-release/README.md`.
+The Supabase MCP `apply_migration` / `execute_sql` routes, the Management API, the SQL editor and `supabase db push` are NOT verified for
+these scripts (their transaction handling is undocumented, and `apply_migration` records its own history row) and must not be used for production.
+Nothing in this section has been executed; every step below needs its own Commander authorization.
+
+0. Backup (Step -1): a Commander-confirmed recovery copy. The backup runbook is blocked until the commands and coverage are validated against a
+   disposable PostgreSQL 17. A `public` dump is a rollback aid only, not a disaster-recovery backup (it excludes `auth`, `storage` and extension schemas).
+1. Run `01_preflight_readonly.sql` (P1-P7); save the output; stop on any FAIL row.
+2. Change 1: `psql -f 02_change1_least_privilege.sql` (one atomic transaction with `lock_timeout = '5s'`).
+3. Run `03_verify_change1_readonly.sql` and `04_verify_behavior_readonly.sql` (3.5). On any failure run the rollback (3.6) immediately.
+4. Only after a separate Commander authorization: Change 2, `psql -f 06_change2_rls_auto_enable.sql`. Its preflight refuses to run unless the exact
+   post-Change-1 ACLs are present (change-order gate), but that gate does not replace step 3. Then run `07_verify_change2_readonly.sql`.
+5. The psql route writes no row to `supabase_migrations.schema_migrations`, and the migration file stays in `supabase/pending/`. Moving it to
+   `supabase/migrations/` and reconciling the migration history are a separate follow-up that needs its own authorization.
 
 ### 3.5 Verification queries (after each change; all read-only)
 
