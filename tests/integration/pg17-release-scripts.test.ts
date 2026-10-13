@@ -65,6 +65,7 @@ function emit(title: string, message: string) {
 
 describe.skipIf(!enabled)('Phase 7B production scripts on PostgreSQL 17.6 (disposable container, scripts unadapted)', { timeout: 300_000 }, () => {
   let s0 = '';
+  let sPost1 = ''; // state right after Change 1 (set by S4b)
 
   beforeAll(() => {
     sh('docker', ['rm', '-f', PG]);
@@ -194,6 +195,16 @@ describe.skipIf(!enabled)('Phase 7B production scripts on PostgreSQL 17.6 (dispo
     expect(after).toBe(s0);
   });
 
+  it('S3b: Change 2 is rejected on the original baseline (change-order gate) and nothing changes', () => {
+    expect(state()).toBe(s0);
+    const r = runC('postgres', script('06_change2_rls_auto_enable.sql'));
+    ev(`change2 on baseline: exit=${r.code} msg=${(r.err.match(/PREFLIGHT:[^\n]*/) ?? [''])[0].slice(0, 140)} state unchanged=${state() === s0}`);
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('PREFLIGHT: Change 1 is not in place');
+    expect(state()).toBe(s0);
+    expect(q("select coalesce(proacl::text,'NULL') from pg_proc where proname='rls_auto_enable'")).toBe('NULL');
+  });
+
   it('S4: Change 1 (exact script) applies, verifies, and cannot be run twice', () => {
     const r = runC('postgres', script('02_change1_least_privilege.sql'));
     expect(r.code, r.err).toBe(0);
@@ -215,6 +226,41 @@ describe.skipIf(!enabled)('Phase 7B production scripts on PostgreSQL 17.6 (dispo
     expect(state()).toBe(s1);
   });
 
+  it('S4b: Change 2 gate rejects partial, drifted and over-revoked Change 1 states; a Change 2 mutant that touches table ACLs is rolled back', () => {
+    sPost1 = state();
+    expect(sPost1).not.toBe(s0);
+    const s = script('06_change2_rls_auto_enable.sql');
+    const cases: { name: string; apply: string; revert: string; msg: string }[] = [
+      { name: 'partial: anon SELECT left on env_vars', apply: 'grant select on public.env_vars to anon', revert: 'revoke select on public.env_vars from anon', msg: 'ACL of public.env_vars' },
+      { name: 'partial: TRUNCATE left on seo_settings for authenticated', apply: 'grant truncate on public.seo_settings to authenticated', revert: 'revoke truncate on public.seo_settings from authenticated', msg: 'ACL of public.seo_settings' },
+      { name: 'partial: default ACL still hands TRUNCATE to anon', apply: 'alter default privileges for role postgres in schema public grant truncate on tables to anon', revert: 'alter default privileges for role postgres in schema public revoke truncate on tables from anon', msg: 'default ACL (postgres, public, tables)' },
+      { name: 'over-revoked: authenticated lost SELECT on integrations', apply: 'revoke select on public.integrations from authenticated', revert: 'grant select on public.integrations to authenticated', msg: 'ACL of public.integrations' },
+      { name: 'over-revoked: authenticated lost DELETE on forgestudio_project_versions', apply: 'revoke delete on public.forgestudio_project_versions from authenticated', revert: 'grant delete on public.forgestudio_project_versions to authenticated', msg: 'ACL of public.forgestudio_project_versions' },
+    ];
+    for (const c of cases) {
+      q(c.apply);
+      const before = state();
+      const r = runC('postgres', s);
+      const after = state();
+      ev(`gate ${c.name}: exit=${r.code} msg=${(r.err.match(/PREFLIGHT:[^\n]*/) ?? [''])[0].slice(0, 120)} state unchanged=${after === before}`);
+      expect(r.code, c.name).not.toBe(0);
+      expect(r.err, c.name).toContain('PREFLIGHT: Change 1 is not in place');
+      expect(r.err, c.name).toContain(c.msg);
+      expect(after, c.name).toBe(before);
+      q(c.revert);
+      expect(state(), `${c.name} revert`).toBe(sPost1);
+    }
+    // the new POSTCHECK: a Change 2 that also alters a table ACL must roll back completely
+    const stmt = 'revoke execute on function public.rls_auto_enable() from public, anon, authenticated;';
+    expect(s).toContain(stmt);
+    const mutant = s.replace(stmt, `${stmt}\ngrant select on public.env_vars to anon;`);
+    const m = runC('postgres', mutant);
+    ev(`change2 mutant altering a table ACL: exit=${m.code} msg=${(m.err.match(/POSTCHECK:[^\n]*/) ?? [''])[0].slice(0, 120)} state unchanged=${state() === sPost1}`);
+    expect(m.code).not.toBe(0);
+    expect(m.err).toContain('POSTCHECK: row counts / RLS flags / policies / table ACLs changed');
+    expect(state()).toBe(sPost1);
+  });
+
   it('S5: Change 2 POSTCHECK failure rolls back; real Change 2 applies and verifies', () => {
     const s = script('06_change2_rls_auto_enable.sql');
     const stmt = 'revoke execute on function public.rls_auto_enable() from public, anon, authenticated;';
@@ -232,6 +278,17 @@ describe.skipIf(!enabled)('Phase 7B production scripts on PostgreSQL 17.6 (dispo
     ev(`Change 2 applied. 07 verify: ${passCount(v7.out)} PASS, FAIL rows=[${failRows(v7.out).join(',')}]; ${q("select 'X|probe tables='||count(*) from pg_class where relname='_rls_gate_probe'")}`);
     expect(failRows(v7.out)).toEqual([]);
     expect(state()).toContain('X|probe tables=0');
+  });
+
+  it('S5b: Change 2 left the table ACLs unchanged, and a repeat run is rejected', () => {
+    expect(noF(state())).toBe(noF(sPost1));
+    const before = state();
+    const again = runC('postgres', script('06_change2_rls_auto_enable.sql'));
+    ev(`repeat-run of Change 2: exit=${again.code} msg=${(again.err.match(/PREFLIGHT:[^\n]*/) ?? [''])[0].slice(0, 120)}`);
+    expect(again.code).not.toBe(0);
+    expect(again.err).toContain('PREFLIGHT: proacl is');
+    expect(again.err).not.toContain('Change 1 is not in place'); // the gate passes; the existing precheck refuses the repeat
+    expect(state()).toBe(before);
   });
 
   it('S6: both rollbacks restore the baseline and refuse to run when the change is not in place', () => {
@@ -253,6 +310,16 @@ describe.skipIf(!enabled)('Phase 7B production scripts on PostgreSQL 17.6 (dispo
     expect(noF(state())).toBe(noF(s0));
     // only the proacl-text row may differ from the original baseline
     expect(failRows(pf.out).length).toBeLessThanOrEqual(1);
+  });
+
+  it('S6b: after the rollbacks (baseline ACLs) Change 2 is rejected again by the gate', () => {
+    const before = state();
+    expect(noF(before)).toBe(noF(s0));
+    const r = runC('postgres', script('06_change2_rls_auto_enable.sql'));
+    ev(`change2 after rollbacks: exit=${r.code} msg=${(r.err.match(/PREFLIGHT:[^\n]*/) ?? [''])[0].slice(0, 120)}`);
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('PREFLIGHT: Change 1 is not in place');
+    expect(state()).toBe(before);
   });
 
   it('S7: re-apply after rollback works (Change 1 then Change 2)', () => {
