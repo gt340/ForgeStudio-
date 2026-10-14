@@ -78,7 +78,7 @@ const LOG: string[] = []; // every argument list + captured text (never stdin, n
 function run(cmd: string, args: string[], o: { input?: string | Buffer; env?: NodeJS.ProcessEnv; cwd?: string; timeout?: number } = {}): Res {
   LOG.push(`$ ${cmd} ${args.join(' ')}`);
   const r = spawnSync(cmd, args, {
-    input: o.input, env: o.env ?? process.env, cwd: o.cwd, timeout: o.timeout ?? 240_000, maxBuffer: 256 * 1024 * 1024, encoding: 'buffer',
+    input: o.input, env: o.env ?? process.env, cwd: o.cwd, timeout: o.timeout ?? 240_000, maxBuffer: 256 * 1024 * 1024, // no `encoding` option: spawnSync then returns Buffers, which keeps dumps binary-safe
   });
   const buf = r.stdout ?? Buffer.alloc(0);
   const err = (r.stderr ? r.stderr.toString('utf8') : '') + (r.error ? String(r.error.message) : '');
