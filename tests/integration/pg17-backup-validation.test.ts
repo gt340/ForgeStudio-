@@ -36,6 +36,8 @@ export const GPG_FLAGS = ['--batch', '--yes', '--pinentry-mode', 'loopback', '--
 // Catalog categories that MUST be identical after a restore; D / E / Edep / N are "observed" (see compare logic)
 export const STRICT = ['T', 'C', 'K', 'I', 'P', 'A', 'F', 'R', 'H'];
 const cat = (line: string) => line.slice(0, line.indexOf('|'));
+// regprocedure text omits the schema when `public` is on the search_path, so match on the function name only
+const isRlsFn = (l: string) => l.startsWith('F|') && l.includes('rls_auto_enable()');
 
 // ---- pure helpers (also exercised without Docker) ----
 export function assertPg176(text: string, what: string): void {
@@ -274,7 +276,7 @@ describe.skipIf(!enabled)('Phase 7B backup/restore validation on PostgreSQL 17.6
     expect(rows).toContain('R|seo_settings|2');
     expect(rows).toContain('R|env_vars|2');
     expect(srcSnap.some((l) => l.startsWith('E|ensure_rls|'))).toBe(true);
-    expect(srcSnap.some((l) => l.startsWith('F|public.rls_auto_enable()'))).toBe(true);
+    expect(srcSnap.some(isRlsFn)).toBe(true);
     const counts = Object.fromEntries(['T', 'C', 'K', 'I', 'P', 'A', 'F', 'R', 'H', 'D', 'E', 'Edep', 'N'].map((k) => [k, srcSnap.filter((l) => cat(l) === k).length]));
     S.counts = JSON.stringify(counts);
     notice('A-source', `snapshot lines by category ${S.counts}; rows ${rows}`);
@@ -378,8 +380,9 @@ describe.skipIf(!enabled)('Phase 7B backup/restore validation on PostgreSQL 17.6
   });
 
   it('B3: default privileges, schema ACL, rls_auto_enable() and the event trigger are accounted for', () => {
-    const rls = restoredSnap.filter((l) => l.startsWith('F|public.rls_auto_enable()'));
-    expect(rls).toEqual(srcSnap.filter((l) => l.startsWith('F|public.rls_auto_enable()')));
+    const rls = restoredSnap.filter(isRlsFn);
+    expect(rls).toHaveLength(1);
+    expect(rls).toEqual(srcSnap.filter(isRlsFn));
     expect(rls[0]).toContain('secdef=true');
     // N: schema-level ACL (observed)
     const nSrc = srcSnap.filter((l) => cat(l) === 'N');
