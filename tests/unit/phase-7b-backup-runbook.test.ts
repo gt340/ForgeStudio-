@@ -35,6 +35,14 @@ describe('Phase 7B backup runbook (static)', () => {
     expect(test).toContain("'--single-transaction'");
   });
 
+  it('documents the schema ACL capture and recovery step that the CI test performs', () => {
+    expect(runbook).toContain('schema-acl.txt');
+    expect(runbook).toContain('| 12b |');
+    expect(test).toContain('schemaAclRecoverySql');
+    expect(test).toContain("'schema-acl.txt'");
+    expect(test).toMatch(/diffSnap\(srcSnap, after, \['N'\]\)/);
+  });
+
   it('contains no password literal or connection string with a password', () => {
     expect(runbook).not.toMatch(/postgres(ql)?:\/\/[^\s:@]+:[^\s@]+@/);
     expect(runbook).not.toMatch(/PGPASSWORD=\S/);
