@@ -1,6 +1,6 @@
 # Phase 7B backup runbook (DRAFT, for review)
 
-**Status: DRAFT. Every command below is labeled UNTESTED until successful CI evidence is attached to it (see section 3).**
+**Status: DRAFT. A command is labeled TESTED-IN-DISPOSABLE-CI only for the exact flags a passing CI run executed (CI run 38628737545 (commit b417c3d)); every other command or form stays UNTESTED (see section 3).**
 **Passing the disposable-database test does NOT authorize running anything against production.** Production backups, Change 1 and
 Change 2 each still need a separate, explicit Commander authorization.
 
@@ -35,19 +35,19 @@ in the CI run named in the status column; it still says nothing about production
 |---|---|---|---|
 | 1 | Prepare a private directory outside the repository | `umask 077; BK="$HOME/forge-backups/$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$BK"` | UNTESTED (the test uses `mkdtemp` outside the repo, mode 700) |
 | 2 | Enter the password at a hidden prompt, without history | `set +o history; read -rsp 'DB password: ' PGPASSWORD; echo; export PGPASSWORD` | UNTESTED (the test passes the password through the process environment) |
-| 3 | Dump schema `public` (custom format) | `pg_dump -h <pooler-host> -p 5432 -U postgres.<project-ref> -d postgres -w --schema=public --format=custom > "$BK/forgestudio-public.dump.partial"` | UNTESTED (flags `-w --schema=public --format=custom`) |
+| 3 | Dump schema `public` (custom format) | `pg_dump -h <pooler-host> -p 5432 -U postgres.<project-ref> -d postgres -w --schema=public --format=custom > "$BK/forgestudio-public.dump.partial"` | flags `-w --schema=public --format=custom` TESTED-IN-DISPOSABLE-CI (CI run 38628737545 (commit b417c3d), output captured over TCP as non-superuser `postgres`); this exact shell line, the pooler host and TLS are UNTESTED |
 | 4 | Keep only a successful, non-empty dump | `test -s "$BK/forgestudio-public.dump.partial" && mv "$BK/forgestudio-public.dump.partial" "$BK/forgestudio-public.dump"` | UNTESTED |
 | 5 | Clear the password | `unset PGPASSWORD; set -o history` | UNTESTED |
-| 6 | Readability check, nothing printed except a count | `pg_restore --list "$BK/forgestudio-public.dump" \| grep -c ' TABLE DATA public '` (expect 5) | UNTESTED |
-| 7 | SHA-256 of the dump and a catalog snapshot | `( cd "$BK" && sha256sum forgestudio-public.dump source.snapshot > SHA256SUMS && sha256sum -c SHA256SUMS )` | UNTESTED |
-| 8 | Bundle and encrypt (GPG symmetric AES-256), passphrase from a hidden prompt | `tar -cf "$BK/bundle.tar" -C "$BK" forgestudio-public.dump source.snapshot SHA256SUMS && read -rsp 'Passphrase: ' P; echo; printf '%s\n' "$P" \| gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --symmetric --cipher-algo AES256 --output "$BK/forgestudio-backup.tar.gpg" "$BK/bundle.tar"; unset P` | UNTESTED (flags `--batch --yes --pinentry-mode loopback --passphrase-fd 0 --symmetric --cipher-algo AES256`) |
+| 6 | Readability check, nothing printed except a count | `pg_restore --list "$BK/forgestudio-public.dump" \| grep -c ' TABLE DATA public '` (expect 5) | `pg_restore --list` TESTED-IN-DISPOSABLE-CI (CI run 38628737545 (commit b417c3d), counted in code, 5 TABLE DATA entries asserted); the `grep -c` pipeline is UNTESTED |
+| 7 | SHA-256 of the dump and a catalog snapshot | `( cd "$BK" && sha256sum forgestudio-public.dump source.snapshot > SHA256SUMS && sha256sum -c SHA256SUMS )` | `sha256sum -c` TESTED-IN-DISPOSABLE-CI (CI run 38628737545 (commit b417c3d)); the snapshot file comes from step 13 |
+| 8 | Bundle and encrypt (GPG symmetric AES-256), passphrase from a hidden prompt | `tar -cf "$BK/bundle.tar" -C "$BK" forgestudio-public.dump source.snapshot SHA256SUMS && read -rsp 'Passphrase: ' P; echo; printf '%s\n' "$P" \| gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --symmetric --cipher-algo AES256 --output "$BK/forgestudio-backup.tar.gpg" "$BK/bundle.tar"; unset P` | flags `--batch --yes --pinentry-mode loopback --passphrase-fd 0 --symmetric --cipher-algo AES256` and `tar -cf/-xf` TESTED-IN-DISPOSABLE-CI (CI run 38628737545 (commit b417c3d), decrypt round trip, wrong passphrase rejected); the shell form with `read -rsp` is UNTESTED |
 | 9 | Checksum of the encrypted file, then delete the plaintext | `( cd "$BK" && sha256sum forgestudio-backup.tar.gpg > SHA256SUMS.gpg && sha256sum -c SHA256SUMS.gpg ) && rm -f "$BK/bundle.tar" "$BK/forgestudio-public.dump" "$BK/source.snapshot" "$BK/SHA256SUMS"` | UNTESTED |
-| 10 | Second protected location | copy `forgestudio-backup.tar.gpg` and `SHA256SUMS.gpg` to a second, independently protected place; run `sha256sum -c SHA256SUMS.gpg` there | UNTESTED (the test verifies two local directories only) |
-| 11 | Restore into a separate disposable instance | prepare the target (roles `postgres anon authenticated service_role authenticator`, an `auth` schema with `auth.users(id)` and `auth.uid()`; see `supabase/tests/pg17-backup-target-prep.sql`), then `pg_restore -h <disposable-host> -U <superuser> -d <empty-db> -w --single-transaction forgestudio-public.dump` | UNTESTED |
-| 12 | Re-create what the dump does not carry | `create event trigger ensure_rls on ddl_command_end when tag in ('CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO') execute function public.rls_auto_enable();` as a superuser, plus the default privileges of section 9 if they were not restored | UNTESTED |
-| 13 | Compare source and restore | run `supabase/tests/pg17-backup-verify.sql` on both (`psql -X -At -v ON_ERROR_STOP=1 -f`) and diff the two outputs | UNTESTED |
+| 10 | Second protected location | copy `forgestudio-backup.tar.gpg` and `SHA256SUMS.gpg` to a second, independently protected place; run `sha256sum -c SHA256SUMS.gpg` there | `sha256sum -c` on two local directories TESTED-IN-DISPOSABLE-CI (CI run 38628737545 (commit b417c3d)); real second location UNTESTED |
+| 11 | Restore into a separate disposable instance | prepare the target (roles `postgres anon authenticated service_role authenticator`, an `auth` schema with `auth.users(id)` and `auth.uid()`; see `supabase/tests/pg17-backup-target-prep.sql`), then `pg_restore -h <disposable-host> -U <superuser> -d <empty-db> -w --single-transaction forgestudio-public.dump` | flags `-w --single-transaction` and the target-prep script TESTED-IN-DISPOSABLE-CI (CI run 38628737545 (commit b417c3d), restore into a fresh database on a separate container, from the decrypted copy) |
+| 12 | Re-create what the dump does not carry | `create event trigger ensure_rls on ddl_command_end when tag in ('CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO') execute function public.rls_auto_enable();` as a superuser, plus the default privileges (section 11) if they were not restored | event trigger DDL TESTED-IN-DISPOSABLE-CI (CI run 38628737545 (commit b417c3d)); the default privileges WERE restored by the dump, so the default-privilege DDL was not needed in that run and stays UNTESTED |
+| 13 | Compare source and restore | run `supabase/tests/pg17-backup-verify.sql` on both (`psql -X -At -v ON_ERROR_STOP=1 -f`) and diff the two outputs | TESTED-IN-DISPOSABLE-CI (CI run 38628737545 (commit b417c3d), run by the test with the same file; diff done in code) |
 
-Status changes from UNTESTED are made only after a CI run on this branch has passed, and only for the exact flags that run used.
+Status changes from UNTESTED are made only for the exact flags a passing CI run used. Steps 1, 2, 4, 5 and 9 (shell forms, hidden prompts, history control, plaintext removal by `rm`) were not executed as written and remain UNTESTED; the test performs the equivalent actions in Node.
 The production-facing form of steps 2, 3 and 11 (session pooler, `sslmode`, the `postgres.<project-ref>` role) is **never** covered by the
 disposable test and stays UNTESTED until a Commander-authorized production run proves it.
 
@@ -79,19 +79,26 @@ Keep two copies in independently protected places (for example two different enc
 Restore only into a disposable instance, never into the production project. `pg_dump --schema=public` writes `CREATE SCHEMA public`, so the target's own empty `public` must be dropped first (done by the target-prep script, with the disposable-only warning).
 
 **PASS requires all of:** `pg_restore` exit 0; zero differences between the source and restored snapshots in the categories tables, columns, constraints (PK/FK/CHECK/UNIQUE), indexes, policies, table ACLs, functions (owner, security definer, ACL, source md5), row counts and content hashes; the empty table restored empty; the event trigger and the default privileges identical after the recovery DDL of step 12.
-**Anything else is FAIL.** Observed-only items (schema ACL, default ACLs, event trigger) are reported in the CI evidence with whether the dump preserved them.
+**Anything else is FAIL.** Observed-only items (schema ACL, default ACLs, event trigger) are reported in the CI evidence with whether the dump preserved them; the schema ACL difference of section 11 is a known, documented difference that is not silently accepted.
 
-What the dump format does and does not preserve is recorded from CI evidence in section 11 (to be completed from the CI run; until then treat every statement there as UNTESTED).
+What the dump format does and does not preserve is recorded from CI evidence in section 11.
 
 ## 10. Failure response and stop conditions
 
 Stop and do not proceed to Change 1 if any of the following happens: a command exits non-zero; the dump is empty or `pg_restore --list` fails; a checksum does not verify; the decrypted bundle differs; the restore fails or the snapshot comparison shows any difference; a password or secret appeared in any output (treat it as compromised, rotate it, tell the Commander). Delete a failed `.partial` file; never describe a failed or unverified artifact as a backup. The failure modes below are exercised by the CI test and must keep failing correctly: missing database, wrong password, missing/empty/truncated/corrupted artifact, wrong checksum, wrong GPG passphrase, failed restore, tampered restore, missing client binary, unavailable image, PostgreSQL 16 client.
 
-## 11. What the backup includes and excludes (from the CI evidence)
+## 11. What the backup includes and excludes (from CI run 38628737545 (commit b417c3d))
 
-Verified by the CI test once it has passed (status: **UNTESTED until the CI run is attached**): tables, columns, constraints, indexes, policies, table ACLs, the function `rls_auto_enable()`, row data.
-Recorded as observed differences in the CI evidence: whether default privileges, the schema ACL and the event trigger are carried by a `--schema=public` dump. The local PostgreSQL 16 smoke run (not evidence for 17.6) suggested that the event trigger is not carried, so step 12 re-creates it, and that the default ACLs are.
-Not included by design: any schema other than `public`.
+Observed on PostgreSQL 17.6 with the synthetic replica (annotations `[B-compare]` and `[B-security]`):
+
+- **Carried and identical after restore (0 diff lines):** tables (5), columns (52), constraints (13, including PK, FK and the CHECK), indexes, policies, table ACLs, the function `rls_auto_enable()` (owner, SECURITY DEFINER, ACL, source md5), row counts and per-table content hashes. The empty table restored empty. Foreign keys are enforced after restore.
+- **Default privileges** of schema `public` (both `supabase_admin` and `postgres` entries): carried by the dump (`default ACLs preserved by dump=yes`).
+- **Event trigger `ensure_rls`: NOT carried** by a `--schema=public` dump. It was re-created by the superuser DDL of step 12, after which definition, enabled state, owner (`supabase_admin`) and dependency lines equaled the source.
+- **Schema ACL of `public`: NOT identical** (`schema ACL (N) identical=false`). The source line ends with the PUBLIC `USAGE` entry (`=U/pg_database_owner`); the restored schema lacks it. The test records this as an observed difference and does not fix it. Restoring it is an explicit manual step (UNTESTED) and the production value of this ACL has not been measured, so compare against the real source before granting anything.
+- **Secrets:** the synthetic canary tokens were present in the restored data (verified without printing them), i.e. a dump of `integrations` / `env_vars` carries them. The GPG artifact contained no canary plaintext.
+- Not included by design: any schema other than `public`, and everything listed in section 13.
+
+Evidence gap: the text of the `[A-...]` annotations (versions, artifact size, hash prefix, cipher line) could not be retrieved from the Actions page (only a truncated excerpt is visible); the tests that assert those facts (A1 to A5) passed.
 
 ## 12. Disposable replica versus production (documented differences)
 
