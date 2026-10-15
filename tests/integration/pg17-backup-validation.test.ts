@@ -35,11 +35,32 @@ export const GPG_FLAGS = ['--batch', '--yes', '--pinentry-mode', 'loopback', '--
 
 // Catalog categories that MUST be identical after a restore; D / E / Edep / N are "observed" (see compare logic)
 export const STRICT = ['T', 'C', 'K', 'I', 'P', 'A', 'F', 'R', 'H'];
+// categories that must ALSO be identical once the documented recovery steps (event trigger, default ACLs, schema ACL) were applied
+export const STRICT_AFTER_RECOVERY = [...STRICT, 'D', 'E', 'Edep', 'N'];
 const cat = (line: string) => line.slice(0, line.indexOf('|'));
 // regprocedure text omits the schema when `public` is on the search_path, so match on the function name only
 const isRlsFn = (l: string) => l.startsWith('F|') && l.includes('rls_auto_enable()');
 
 // ---- pure helpers (also exercised without Docker) ----
+// Schema-ACL recovery: the captured source ACL is a list of `grantee|privilege|grantable` rows (grantee PUBLIC = 0). The generated DDL first
+// revokes everything on schema public from every grantee seen in the source capture or in the restored target, then re-grants exactly the
+// captured entries. Nothing about the ACL is assumed: an empty or unusual source ACL is reproduced as captured.
+const q = (ident: string) => `"${ident.replace(/"/g, '""')}"`;
+export function schemaAclRecoverySql(captured: string[], targetGrantees: string[]): string {
+  const rows = captured.filter(Boolean).map((l) => {
+    const [grantee, priv, grantable] = l.split('|');
+    if (!grantee || !/^[A-Z]+$/.test(priv ?? '') || !/^(true|false)$/.test(grantable ?? '')) throw new Error('malformed schema ACL capture line');
+    return { grantee, priv, grantable: grantable === 'true' };
+  });
+  const roles = new Set<string>([...rows.map((r) => r.grantee), ...targetGrantees.filter(Boolean)]);
+  roles.delete('PUBLIC');
+  const who = (g: string) => (g === 'PUBLIC' ? 'PUBLIC' : q(g));
+  return [
+    'revoke all on schema public from public;',
+    ...[...roles].sort().map((r) => `revoke all on schema public from ${q(r)};`),
+    ...rows.map((r) => `grant ${r.priv} on schema public to ${who(r.grantee)}${r.grantable ? ' with grant option' : ''};`),
+  ].join('\n');
+}
 export function assertPg176(text: string, what: string): void {
   if (!/(^|[^0-9.])17\.6(\.|\s|$)/.test(text.trim())) throw new Error(`${what} is not PostgreSQL 17.6: ${text.trim().slice(0, 80)}`);
 }
@@ -54,6 +75,16 @@ export function findLeaks(haystack: string, secrets: string[]): string[] {
 }
 
 describe('backup validation helpers (no Docker needed)', () => {
+  it('schema ACL recovery SQL reproduces exactly the captured entries and rejects malformed input', () => {
+    const sqlText = schemaAclRecoverySql(['pg_database_owner|USAGE|false', 'pg_database_owner|CREATE|false', 'PUBLIC|USAGE|false', 'ro"le|USAGE|true'], ['old_role']);
+    expect(sqlText).toContain('revoke all on schema public from public;');
+    expect(sqlText).toContain('revoke all on schema public from "old_role";');
+    expect(sqlText).toContain('grant USAGE on schema public to PUBLIC;');
+    expect(sqlText).toContain('grant USAGE on schema public to "ro""le" with grant option;');
+    expect(sqlText).not.toContain('revoke all on schema public from "PUBLIC"');
+    expect(schemaAclRecoverySql([], [])).toBe('revoke all on schema public from public;');
+    expect(() => schemaAclRecoverySql(['x|USAGE; drop table t|false'], [])).toThrow(/malformed/);
+  });
   it('version guard accepts 17.6.x and rejects 16.x / 17.5 / empty', () => {
     expect(() => assertPg176('pg_dump (PostgreSQL) 17.6', 'x')).not.toThrow();
     expect(() => assertPg176('17.6 (Debian 17.6-1.pgdg120+1)', 'x')).not.toThrow();
@@ -186,6 +217,10 @@ function newTarget(db: string) {
 }
 const snap = (c: string, db: string) => mustSql(c, db, read('supabase/tests/pg17-backup-verify.sql')).split('\n').filter(Boolean);
 
+// one line per ACL entry of schema public: grantee (PUBLIC for 0) | privilege | grantable. Default ACL of the owner is used when nspacl is NULL.
+const SCHEMA_ACL_QUERY = `select case when a.grantee = 0 then 'PUBLIC' else pg_get_userbyid(a.grantee) end || '|' || a.privilege_type || '|' || a.is_grantable
+  from pg_namespace n cross join lateral aclexplode(coalesce(n.nspacl, acldefault('n', n.nspowner))) a
+ where n.nspname = 'public' order by 1`;
 const EVENT_TRIGGER_DDL =
   "create event trigger ensure_rls on ddl_command_end when tag in ('CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO') execute function public.rls_auto_enable();";
 const DEFAULT_ACL_DDL = [
@@ -289,7 +324,12 @@ describe.skipIf(!enabled)('Phase 7B backup/restore validation on PostgreSQL 17.6
     expect(b.ok, b.why).toBe(true);
     expect(existsSync(`${dump}.partial`)).toBe(false);
     writeFileSync(path.join(stage, 'source.snapshot'), srcSnap.join('\n') + '\n', { mode: 0o600 });
-    writeSums(stage, ['forgestudio-public.dump', 'source.snapshot']);
+    // complete schema ACL of `public`, captured from the SOURCE next to the dump (travels inside the encrypted bundle)
+    const aclCapture = mustSql(SRC, 'app', SCHEMA_ACL_QUERY);
+    expect(aclCapture.length).toBeGreaterThan(0); // an empty capture would make the recovery vacuous
+    writeFileSync(path.join(stage, 'schema-acl.txt'), aclCapture + '\n', { mode: 0o600 });
+    S.srcSchemaAcl = srcSnap.find((l) => cat(l) === 'N') ?? '';
+    writeSums(stage, ['forgestudio-public.dump', 'source.snapshot', 'schema-acl.txt']);
     const v = verifyArtifact(stage, 'forgestudio-public.dump', SRC);
     expect(v.ok, v.why).toBe(true);
     expect(v.data).toBe(5); // five application tables carry TABLE DATA entries (the empty one included)
@@ -302,7 +342,7 @@ describe.skipIf(!enabled)('Phase 7B backup/restore validation on PostgreSQL 17.6
     const stage = path.join(WORK, 'stage');
     const gpgHome = path.join(WORK, 'gnupg');
     const tarPath = path.join(WORK, 'bundle.tar');
-    const tar = run('tar', ['-cf', tarPath, '-C', stage, 'forgestudio-public.dump', 'source.snapshot', 'SHA256SUMS']);
+    const tar = run('tar', ['-cf', tarPath, '-C', stage, 'forgestudio-public.dump', 'source.snapshot', 'schema-acl.txt', 'SHA256SUMS']);
     expect(tar.code).toBe(0);
     const encrypted = path.join(WORK, 'store-a', 'forgestudio-backup.tar.gpg');
     const enc = run('gpg', ['--homedir', gpgHome, ...GPG_FLAGS, '--output', encrypted, tarPath], { input: `${GPG_PASS}\n` });
@@ -379,15 +419,17 @@ describe.skipIf(!enabled)('Phase 7B backup/restore validation on PostgreSQL 17.6
     notice('B-compare', `strict categories ${STRICT.join(' ')} identical (0 diff lines): ${JSON.stringify(counts)}; empty table restored empty; synthetic secrets present in restored data (dump is sensitive), not printed; FK enforced`);
   });
 
-  it('B3: default privileges, schema ACL, rls_auto_enable() and the event trigger are accounted for', () => {
+  it('B3: default privileges, schema ACL, rls_auto_enable() and the event trigger are accounted for and recovered', () => {
     const rls = restoredSnap.filter(isRlsFn);
     expect(rls).toHaveLength(1);
     expect(rls).toEqual(srcSnap.filter(isRlsFn));
     expect(rls[0]).toContain('secdef=true');
-    // N: schema-level ACL (observed)
+    // N: complete schema ACL of `public`. Observed before recovery, then reproduced from the capture stored beside the dump.
     const nSrc = srcSnap.filter((l) => cat(l) === 'N');
-    const nTgt = restoredSnap.filter((l) => cat(l) === 'N');
-    const nEq = diffSnap(nSrc, nTgt).length === 0;
+    expect(nSrc).toHaveLength(1);
+    expect(nSrc[0]).not.toContain('acl=NULL');
+    const nBefore = restoredSnap.filter((l) => cat(l) === 'N');
+    const nDiffBefore = diffSnap(nSrc, nBefore);
     // E / Edep: the dump of `--schema=public` does not carry event triggers; verify, then recover with superuser DDL and re-assert
     const eBefore = restoredSnap.filter((l) => cat(l) === 'E' || cat(l) === 'Edep');
     const eSrc = srcSnap.filter((l) => cat(l) === 'E' || cat(l) === 'Edep');
@@ -399,13 +441,21 @@ describe.skipIf(!enabled)('Phase 7B backup/restore validation on PostgreSQL 17.6
     const dBefore = diffSnap(dSrc, restoredSnap.filter((l) => cat(l) === 'D'));
     if (!eRestoredByDump) mustSql(TGT, 'restored', EVENT_TRIGGER_DDL);
     if (dBefore.length > 0) mustSql(TGT, 'restored', DEFAULT_ACL_DDL);
+    // schema ACL recovery from the DECRYPTED capture (not from the live source)
+    const captured = readFileSync(path.join(WORK, 'extract', 'schema-acl.txt'), 'utf8').split('\n').filter(Boolean);
+    const currentGrantees = mustSql(TGT, 'restored', SCHEMA_ACL_QUERY).split('\n').filter(Boolean).map((l) => l.split('|')[0]);
+    const aclDdl = schemaAclRecoverySql(captured, currentGrantees);
+    mustSql(TGT, 'restored', aclDdl);
     const after = snap(TGT, 'restored');
+    // STRICT assertion: the restored schema ACL must equal the source ACL; weakening this must make the test fail, not pass
+    expect(diffSnap(srcSnap, after, ['N']), 'schema ACL of public after recovery').toEqual([]);
     expect(diffSnap(srcSnap, after, ['D', 'E', 'Edep']), 'default ACL / event trigger state after documented recovery').toEqual([]);
-    expect(diffSnap(srcSnap, after, STRICT)).toEqual([]);
+    expect(diffSnap(srcSnap, after, STRICT_AFTER_RECOVERY)).toEqual([]);
     expect(after.find((l) => l.startsWith('E|ensure_rls|'))).toContain('owner=supabase_admin');
     expect(after.find((l) => l.startsWith('E|ensure_rls|'))).toContain('enabled=O');
     restoredSnap = after;
-    notice('B-security', `rls_auto_enable() restored identical (owner, SECURITY DEFINER, ACL, source md5); schema ACL (N) identical=${nEq}${nEq ? '' : ` DIFF ${nSrc.join(' ')} => ${nTgt.join(' ')}`}; event trigger in dump=${eRestoredByDump ? 'yes' : 'NO -> recreated by documented superuser DDL, then definition/enabled/owner/dependency lines equal source'}; default ACLs preserved by dump=${dBefore.length === 0 ? 'yes' : `NO (${dBefore.length} diff lines) -> recreated by documented DDL, then equal`}`);
+    notice('B-security', `rls_auto_enable() restored identical (owner, SECURITY DEFINER, ACL, source md5); event trigger in dump=${eRestoredByDump ? 'yes' : 'NO -> recreated by documented superuser DDL, then definition/enabled/owner/dependency lines equal source'}; default ACLs preserved by dump=${dBefore.length === 0 ? 'yes' : `NO (${dBefore.length} diff lines) -> recreated by documented DDL, then equal`}`);
+    notice('B-schema-acl', `SOURCE ${nSrc[0]} | RESTORED BEFORE recovery ${nBefore[0] ?? '(none)'} (identical=${nDiffBefore.length === 0}) | capture entries=${captured.length} | RESTORED AFTER recovery ${after.find((l) => cat(l) === 'N')} | strict equality asserted: ${diffSnap(srcSnap, after, ['N']).length === 0}`);
   });
 
   it('C1: failed dump scenarios fail and leave no artifact (missing database, wrong password)', () => {
@@ -475,7 +525,10 @@ describe.skipIf(!enabled)('Phase 7B backup/restore validation on PostgreSQL 17.6
     const diff = diffSnap(srcSnap, snap(TGT, 'tamper'), STRICT);
     const kinds = new Set(diff.map((l) => cat(l.slice(2))));
     for (const k of ['R', 'H', 'I', 'F']) expect(kinds.has(k), `category ${k} flagged`).toBe(true);
-    notice('C-verify-detects', `tampered restore (1 row deleted, 1 index dropped, rls_auto_enable() dropped) -> diff flags categories ${[...kinds].sort().join(',')} (${diff.length} lines)`);
+    // the tampered restore never got the schema-ACL / event-trigger recovery, so the strict recovery comparison must flag it too
+    const afterKinds = new Set(diffSnap(srcSnap, snap(TGT, 'tamper'), STRICT_AFTER_RECOVERY).map((l) => cat(l.slice(2))));
+    expect(afterKinds.has('N'), 'schema ACL difference detected when recovery is not applied').toBe(true);
+    notice('C-verify-detects', `tampered restore (1 row deleted, 1 index dropped, rls_auto_enable() dropped) -> diff flags categories ${[...kinds].sort().join(',')} (${diff.length} lines); without schema-ACL recovery category N is flagged too`);
   });
 
   it('C5: missing tool or unavailable PostgreSQL 17.6 is detected', () => {
