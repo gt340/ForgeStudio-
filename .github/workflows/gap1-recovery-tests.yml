@@ -1,0 +1,39 @@
+name: GAP1 recovery tests
+
+on:
+  push:
+    branches:
+      - phase-7b-gap1-revision3-recovery
+    paths:
+      - "supabase/gap1-recovery/**"
+      - ".github/workflows/gap1-recovery-tests.yml"
+  pull_request:
+    paths:
+      - "supabase/gap1-recovery/**"
+      - ".github/workflows/gap1-recovery-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gap1-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out recovery branch
+        uses: actions/checkout@v4
+      - name: Install isolated local PostgreSQL test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql postgresql-client perl openssl
+      - name: Verify uploaded file checksums
+        working-directory: supabase/gap1-recovery
+        run: sha256sum --check SHA256SUMS.txt
+      - name: Check Bash syntax
+        run: bash -n supabase/gap1-recovery/gap1-run.sh
+      - name: Run GAP1 local-only tests
+        working-directory: supabase/gap1-recovery
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 gap1_test.py
