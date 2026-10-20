@@ -378,7 +378,7 @@ class LocalTlsIntegrationTests(unittest.TestCase):
                     "PGGSSENCMODE": "disable", "PGCONNECT_TIMEOUT": "5"})
         return subprocess.run([os.path.join(PGBIN, "psql"), "-X", "-w", "-v", "ON_ERROR_STOP=1",
                                "-At", "-c",
-                               "select ssl::text || '|' || version from pg_stat_ssl where pid=pg_backend_pid()"],
+                               "select case when ssl then 't' else 'f' end || '|' || version from pg_stat_ssl where pid=pg_backend_pid()"],
                               env=env, capture_output=True, text=True, timeout=15)
 
     def test_real_tls_connection_succeeds_with_trusted_ca_and_matching_hostname(self):
