@@ -896,6 +896,7 @@ if __name__ == "__main__":
         print("SQL runtime tests: ran on a local PostgreSQL 17 (still not production)")
     else:
         print("SQL runtime tests: ran on local PostgreSQL %s. PostgreSQL 17 RUNTIME VERIFICATION: NOT RUN (see docs verification)." % RAN["pg_major"])
-    print("Script-flow tests: psql and the TLS handshake were STUBS (control flow only).")
+    print("Real local TLS integration: loopback PostgreSQL with real psql/libpq; trusted CA accepted, wrong CA and hostname mismatch rejected.")
+    print("Script-flow tests: psql and the OpenSSL probe are STUBS (control-flow coverage only).")
     print("=" * 78)
     sys.exit(0 if result.wasSuccessful() else 1)
