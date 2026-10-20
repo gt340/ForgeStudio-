@@ -8,7 +8,7 @@ They are NOT production verification:
     The banner at the end states which major version actually ran. A run on 16 is NOT PostgreSQL 17 runtime evidence.
 Run:  python3 gap1_test.py
 """
-import glob, os, pty, re, select, shlex, shutil, signal, stat, subprocess, sys, tempfile, time, unittest
+import glob, os, pty, re, select, shlex, shutil, signal, socket, stat, subprocess, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, "gap1-run.sh")
@@ -300,6 +300,108 @@ class SqlRuntimeTests(unittest.TestCase):
             for c in cols:
                 self.assertIn(c, have, "%s.%s missing" % (rel, c))
 
+# ------------------------------------------------------------------
+# real TCP/TLS integration tests: local PostgreSQL only, never Supabase
+@unittest.skipUnless(PGBIN and shutil.which("openssl"), "local PostgreSQL and OpenSSL are required")
+class LocalTlsIntegrationTests(unittest.TestCase):
+    """Uses real libpq/psql TLS against an isolated localhost PostgreSQL server.
+
+    This proves CA-chain and hostname verification against a locally generated CA.
+    It does not contact Supabase or validate Supabase's real certificate/endpoint.
+    """
+    @classmethod
+    def setUpClass(cls):
+        cls.root = tempfile.mkdtemp(prefix="gap1-local-tls-", dir=SCRATCH)
+        os.chmod(cls.root, 0o755)
+        if os.geteuid() == 0:
+            shutil.chown(cls.root, "postgres")
+        cls.data = os.path.join(cls.root, "data")
+        cls.sockdir = os.path.join(cls.root, "sock")
+        os.makedirs(cls.sockdir, mode=0o755)
+        if os.geteuid() == 0:
+            shutil.chown(cls.sockdir, "postgres")
+        # Pick a currently unused TCP port; this server binds only to loopback.
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            cls.port = probe.getsockname()[1]
+        cls.ca = os.path.join(cls.root, "test-ca.crt")
+        ca_key = os.path.join(cls.root, "test-ca.key")
+        server_key = os.path.join(cls.root, "server.key")
+        csr = os.path.join(cls.root, "server.csr")
+        server_crt = os.path.join(cls.root, "server.crt")
+        san = os.path.join(cls.root, "server-ext.cnf")
+        with open(san, "w", encoding="utf-8") as f:
+            f.write("subjectAltName=DNS:localhost\nextendedKeyUsage=serverAuth\nkeyUsage=digitalSignature,keyEncipherment\n")
+        openssl = shutil.which("openssl")
+        subprocess.run([openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                        "-keyout", ca_key, "-out", cls.ca, "-subj", "/CN=GAP1 local test CA",
+                        "-days", "2", "-sha256"], check=True, capture_output=True, text=True)
+        subprocess.run([openssl, "req", "-new", "-newkey", "rsa:2048", "-nodes",
+                        "-keyout", server_key, "-out", csr, "-subj", "/CN=localhost"],
+                       check=True, capture_output=True, text=True)
+        subprocess.run([openssl, "x509", "-req", "-in", csr, "-CA", cls.ca, "-CAkey", ca_key,
+                        "-CAcreateserial", "-out", server_crt, "-days", "2", "-sha256",
+                        "-extfile", san], check=True, capture_output=True, text=True)
+        subprocess.run(as_pg([os.path.join(PGBIN, "initdb"), "-D", cls.data, "-A", "trust"]),
+                       check=True, capture_output=True)
+        # Install the server key/cert where the postgres OS account can read them.
+        for src, name, mode in ((server_crt, "server.crt", 0o644), (server_key, "server.key", 0o600)):
+            dst = os.path.join(cls.data, name)
+            shutil.copyfile(src, dst)
+            os.chmod(dst, mode)
+            if os.geteuid() == 0:
+                shutil.chown(dst, "postgres")
+        with open(os.path.join(cls.data, "postgresql.conf"), "a", encoding="utf-8") as f:
+            f.write("\nlisten_addresses='127.0.0.1'\nport=%d\nunix_socket_directories='%s'\nssl=on\nssl_cert_file='server.crt'\nssl_key_file='server.key'\n" %
+                    (cls.port, cls.sockdir.replace("'", "''")))
+        subprocess.run(as_pg([os.path.join(PGBIN, "pg_ctl"), "-D", cls.data, "-w", "-l",
+                              os.path.join(cls.root, "postgres.log"), "start"]),
+                       check=True, capture_output=True, text=True)
+        cls.env_base = os.environ.copy()
+        for key in ("PGSERVICE", "PGSERVICEFILE", "PGOPTIONS", "PGSSLCERT", "PGSSLKEY",
+                    "PGSSLROOTCERT", "PGSSLMODE", "PGHOSTADDR", "PGPASSWORD"):
+            cls.env_base.pop(key, None)
+
+    @classmethod
+    def tearDownClass(cls):
+        if hasattr(cls, "data") and os.path.isdir(cls.data):
+            subprocess.run(as_pg([os.path.join(PGBIN, "pg_ctl"), "-D", cls.data, "-m", "fast", "stop"]),
+                           capture_output=True, text=True)
+        if hasattr(cls, "root"):
+            shutil.rmtree(cls.root, ignore_errors=True)
+
+    def psql(self, host="localhost", ca=None):
+        env = self.env_base.copy()
+        env.update({"PGHOST": host, "PGPORT": str(self.port), "PGDATABASE": "postgres",
+                    "PGUSER": "postgres", "PGSSLMODE": "verify-full",
+                    "PGSSLROOTCERT": ca or self.ca, "PGSSLMINPROTOCOLVERSION": "TLSv1.2",
+                    "PGGSSENCMODE": "disable", "PGCONNECT_TIMEOUT": "5"})
+        return subprocess.run([os.path.join(PGBIN, "psql"), "-X", "-w", "-v", "ON_ERROR_STOP=1",
+                               "-At", "-c",
+                               "select ssl::text || '|' || version from pg_stat_ssl where pid=pg_backend_pid()"],
+                              env=env, capture_output=True, text=True, timeout=15)
+
+    def test_real_tls_connection_succeeds_with_trusted_ca_and_matching_hostname(self):
+        r = self.psql()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertRegex(r.stdout.strip(), r"^t\|TLSv1\.[23]$")
+        self.assertNotIn("certificate verify failed", r.stderr.lower())
+
+    def test_real_tls_connection_rejects_wrong_ca(self):
+        decoy = os.path.join(self.root, "decoy-ca.crt")
+        key = os.path.join(self.root, "decoy-ca.key")
+        subprocess.run([shutil.which("openssl"), "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                        "-keyout", key, "-out", decoy, "-subj", "/CN=GAP1 decoy CA",
+                        "-days", "2", "-sha256"], check=True, capture_output=True)
+        r = self.psql(ca=decoy)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertRegex(r.stderr.lower(), r"certificate verify failed|self[- ]signed|unable to get local issuer")
+
+    def test_real_tls_connection_rejects_hostname_mismatch(self):
+        r = self.psql(host="127.0.0.1")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertRegex(r.stderr.lower(), r"hostname mismatch|does not match|certificate.*match|server certificate")
+
 # ------------------------------------------------------------------ script-flow tests (pty, stubbed psql and s_client)
 STUB_PSQL = r'''#!/bin/bash
 echo "psql $*" >> "$STUB_LOG"
@@ -369,7 +471,7 @@ class FlowResult:
     pass
 
 class ScriptFlowTests(unittest.TestCase):
-    """LOCAL ONLY. psql and the TLS handshake are stubs: these tests prove control flow, never a real TLS or database result."""
+    """LOCAL ONLY. These tests stub psql/OpenSSL to exercise prompt/error/redaction control flow; real TLS behavior is tested separately by LocalTlsIntegrationTests. They never connect to Supabase."""
     def setUp(self):
         self.td = tempfile.mkdtemp(prefix="gap1-flow-", dir=SCRATCH)
         self.home = os.path.join(self.td, "home")
