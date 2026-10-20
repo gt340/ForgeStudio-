@@ -36,4 +36,4 @@ jobs:
         working-directory: supabase/gap1-recovery
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: python3 gap1_test.py
+        run: sudo -E python3 gap1_test.py
